@@ -1,0 +1,34 @@
+# Tiny-ADK 配置文件
+# 复制此文件为 tiny_adk.yaml 并根据需要修改
+
+# ========== LLM API 配置 ==========
+llm:
+  # API 基础地址 (OpenAI 兼容的 API 端点)
+  api_base: "http://localhost:8000/v1"
+  
+  # API 密钥 (vLLM 通常使用 "EMPTY")
+  api_key: "EMPTY"
+  
+  # 模型名称
+  model: "QuantTrio/MiniMax-M2-AWQ"
+  
+  # 温度参数 (0.0 - 2.0)，值越高输出越随机
+  temperature: 0.7
+  
+  # 最大生成 token 数 (null 表示不限制)
+  max_tokens: null
+  
+  # 请求超时时间 (秒)
+  timeout: 60.0
+
+# ========== Runner 运行时配置 ==========
+runner:
+  # 是否显示模型的思考过程
+  show_thinking: false
+  
+  # 是否显示 API 请求详情 (调试用)
+  show_request: false
+  
+  # 最大迭代次数 (防止工具调用死循环)
+  max_iterations: 10
+
