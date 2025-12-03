@@ -1,284 +1,84 @@
-# 示例代码说明
+# tiny_adk 示例
 
-这些示例展示了简化版 ADK 的核心功能和用法。
+这是 tiny_adk 三层架构的示例集合。
 
-## 📚 示例列表
+## 架构概览
 
-### 01_basic_agent.py - 基础入门
-
-**学习目标**:
-- 理解 Agent、Session、Runner 三大核心组件
-- 掌握基本的对话流程
-- 了解会话历史如何保存
-
-**核心概念**:
-```python
-Agent    → 定义"是谁"和"能做什么"
-Session  → 保存对话历史
-Runner   → 执行 Agent
+```
+┌────────────────────────────────────────┐
+│  Runner: 配置 + 会话管理 + 编排         │  (~200 行)
+├────────────────────────────────────────┤
+│  Flow: Reason-Act 循环 + 工具执行       │  (~300 行)
+├────────────────────────────────────────┤
+│  Model: LLM 抽象 + 请求/响应格式化       │  (~400 行)
+└────────────────────────────────────────┘
 ```
 
-**运行**:
+## 示例列表
+
+| 示例 | 描述 | 核心概念 |
+|------|------|---------|
+| `01_basic_agent.py` | 基础 Agent 用法 | Runner, Session |
+| `02_agent_with_tools.py` | 带工具的 Agent | 工具调用, Flow |
+| `03_streaming.py` | 流式执行 | 流式输出, 事件 |
+| `04_async_basic.py` | 异步执行 | async/await |
+| `05_async_streaming.py` | 异步流式 | 异步 + 流式 |
+| `06_custom_llm.py` | 自定义 LLM | BaseLlm, 扩展性 |
+| `07_architecture_comparison.py` | 架构说明 | 设计理念 |
+
+## 快速开始
+
+```python
+from tiny_adk import Agent, Session, Runner
+
+# 创建组件
+agent = Agent(name='助手', instruction='你是一个助手')
+session = Session()
+runner = Runner()  # 自动根据配置创建 LLM
+
+# 执行对话
+response = runner.run(agent, session, '你好')
+```
+
+## 可扩展性
+
+### 1. 指定 LLM
+```python
+from tiny_adk import Runner, OpenAILlm
+
+runner = Runner(llm=OpenAILlm(
+    api_base="http://localhost:8000/v1",
+    model="your-model",
+))
+```
+
+### 2. 自定义 Flow
+```python
+from tiny_adk import SimpleFlow, Runner
+
+runner = Runner(
+    flow=SimpleFlow(max_iterations=5),
+)
+```
+
+### 3. 自定义 LLM
+```python
+# 实现自己的 LLM（见 06_custom_llm.py）
+from tiny_adk.models import BaseLlm
+
+class MyCustomLlm(BaseLlm):
+    def generate(self, request): ...
+    def generate_stream(self, request): ...
+    async def generate_async(self, request): ...
+    async def generate_stream_async(self, request): ...
+```
+
+## 运行示例
+
 ```bash
-cd examples
-python 01_basic_agent.py
+# 运行单个示例
+python examples/01_basic_agent.py
+
+# 运行自定义 LLM 示例
+python examples/06_custom_llm.py
 ```
-
----
-
-### 02_agent_with_tools.py - 工具调用
-
-**学习目标**:
-- 使用 @tool 装饰器定义工具
-- 理解 Agent 如何调用工具
-- 观察 Reason-Act 循环
-
-**核心概念**:
-```python
-@tool(description="...")  → 让 LLM 理解工具用途
-Agent(tools=[...])        → 赋予 Agent 能力
-Runner 自动编排           → 何时调用工具由 LLM 决定
-```
-
-**运行**:
-```bash
-python 02_agent_with_tools.py
-```
-
----
-
-### 03_streaming.py - 流式执行
-
-**学习目标**:
-- 使用 run_stream() 实时获取事件
-- 理解事件驱动架构
-- 观察每一步的执行过程
-
-**核心概念**:
-```python
-一切皆事件  → USER_MESSAGE, TOOL_CALL, MODEL_RESPONSE
-流式返回    → 实时观察 Agent 的思考过程
-```
-
-**运行**:
-```bash
-python 03_streaming.py
-```
-
----
-
-### 04_multi_turn.py - 多轮对话
-
-**学习目标**:
-- 理解 Session 的价值
-- 掌握会话序列化和恢复
-- 理解为什么 Runner 要设计成无状态
-
-**核心概念**:
-```python
-Session 保存状态      → 支持多轮对话上下文
-Runner 无状态        → 每次从 Session 加载历史
-可序列化            → 会话可以保存、恢复、迁移
-```
-
-**运行**:
-```bash
-python 04_multi_turn.py
-```
-
----
-
-### 05_multiple_agents.py - 多 Agent 协作
-
-**学习目标**:
-- 创建专业化的 Agent
-- 理解不同 Agent 的职责分工
-- 了解如何组合多个 Agent
-
-**核心概念**:
-```python
-专业化 Agent  → 不同角色有不同能力
-独立 Session  → 每个对话独立的上下文
-Runner 复用   → 同一个 Runner 可执行任何 Agent
-```
-
-**运行**:
-```bash
-python 05_multiple_agents.py
-```
-
----
-
-### 06_async_basic.py - 异步执行
-
-**学习目标**:
-- 使用 async/await 语法执行 Agent
-- 理解同步和异步工具的区别
-- 学习如何并发执行多个 Agent 任务
-
-**核心概念**:
-```python
-run_async()           → 异步执行一轮对话
-async def tool()      → 定义异步工具
-asyncio.gather()      → 并发执行多个任务
-asyncio.to_thread()   → 同步工具不阻塞事件循环
-```
-
-**运行**:
-```bash
-python 06_async_basic.py
-```
-
----
-
-### 07_async_streaming.py - 异步流式执行
-
-**学习目标**:
-- 使用 run_stream_async() 异步流式获取事件
-- 理解异步生成器的使用
-- 学习如何并发处理多个流式请求
-
-**核心概念**:
-```python
-run_stream_async()    → 异步流式执行
-async for event in    → 异步迭代事件
-并发流式              → 同时处理多个请求
-```
-
-**运行**:
-```bash
-python 07_async_streaming.py
-```
-
----
-
-## 🎓 建议学习顺序
-
-1. **第一步**: 运行 `01_basic_agent.py`
-   - 理解三大核心组件
-   - 掌握基本流程
-
-2. **第二步**: 运行 `02_agent_with_tools.py`
-   - 学习工具定义和使用
-   - 观察工具调用过程
-
-3. **第三步**: 运行 `03_streaming.py`
-   - 理解事件系统
-   - 观察执行细节
-
-4. **第四步**: 运行 `04_multi_turn.py`
-   - 理解 Session 的重要性
-   - 掌握状态管理
-
-5. **第五步**: 运行 `05_multiple_agents.py`
-   - 理解多 Agent 系统
-   - 学习如何组织复杂应用
-
-6. **第六步**: 运行 `06_async_basic.py`
-   - 学习异步执行模式
-   - 掌握异步工具定义
-
-7. **第七步**: 运行 `07_async_streaming.py`
-   - 学习异步流式处理
-   - 掌握并发任务执行
-
-## 💡 常见问题
-
-### Q: 如何添加自己的工具？
-
-A: 非常简单：
-```python
-@tool(description="你的工具描述")
-def your_tool(param1: str, param2: int) -> str:
-    # 实现你的逻辑
-    return "结果"
-
-agent = Agent(tools=[your_tool])
-```
-
-### Q: Session 如何持久化？
-
-A: 使用序列化：
-```python
-# 保存
-import json
-with open('session.json', 'w') as f:
-    json.dump(session.to_dict(), f)
-
-# 恢复
-with open('session.json', 'r') as f:
-    data = json.load(f)
-    session = Session.from_dict(data)
-```
-
-### Q: 如何实现异步执行？
-
-A: 使用 Runner 的异步方法：
-```python
-import asyncio
-
-async def main():
-    runner = Runner()
-    agent = Agent(name='助手', instruction='...')
-    session = Session()
-    
-    # 异步执行
-    response = await runner.run_async(agent, session, "你好")
-    
-    # 异步流式执行
-    async for event in runner.run_stream_async(agent, session, "问题"):
-        print(event.content)
-
-asyncio.run(main())
-```
-
-也支持定义异步工具：
-```python
-@tool(description='异步数据库查询')
-async def query_db(sql: str) -> str:
-    result = await database.execute(sql)
-    return str(result)
-```
-
-### Q: 错误处理怎么做？
-
-A: 在 Runner 中捕获异常并记录为事件：
-```python
-try:
-    result = tool.execute(**args)
-except Exception as e:
-    session.add_event(Event(
-        event_type=EventType.ERROR,
-        content={'error': str(e)}
-    ))
-```
-
-## 🔧 扩展建议
-
-想要增强功能？试试这些：
-
-1. **集成真实 LLM**
-   - OpenAI API
-   - Anthropic Claude
-   - 本地模型（Ollama, vLLM(demo中本地部署了server)）
-
-2. **添加持久化**
-   - SQLite 数据库
-   - Redis
-   - 文件系统
-
-3. **异步功能** ✅ 已实现
-   - `run_async()` - 异步执行
-   - `run_stream_async()` - 异步流式
-   - 支持异步工具定义
-
-4. **添加监控**
-   - 日志记录
-   - 性能追踪
-   - 错误告警
-
-5. **Web 界面**
-   - FastAPI 后端
-   - React/Vue 前端
-   - WebSocket 实时通信
-
