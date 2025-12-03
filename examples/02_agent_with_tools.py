@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tiny_adk import Agent, Runner, tool
+from tiny_adk import Agent, Runner, SessionService, tool
 
 
 # 定义工具函数
@@ -36,7 +36,7 @@ def calculator(expression: str) -> str:
 
 
 def main():
-    # 创建带工具的 Agent
+    # 1. 创建带工具的 Agent
     agent = Agent(
         name='智能助手',
         model='QuantTrio/MiniMax-M2-AWQ',
@@ -44,7 +44,10 @@ def main():
         tools=[web_search, get_weather, calculator],
     )
     
-    runner = Runner()
+    # 2. 创建 SessionService 和 Runner
+    session_service = SessionService()
+    runner = Runner(session_service=session_service)
+    
     user_id = 'user_001'
     
     # 测试不同的工具调用
@@ -56,6 +59,9 @@ def main():
     
     for i, message in enumerate(test_messages, 1):
         session_id = f'session_{i}'  # 每个问题使用独立 session
+        
+        # 显式创建 Session
+        session_service.create_session_sync(user_id=user_id, session_id=session_id)
         
         print(f'\n=== 对话 {i} ===')
         print(f'用户: {message}')
@@ -69,7 +75,7 @@ def main():
         print(f'Agent: {response}')
         
         # 显示使用了哪些工具
-        session = runner.get_session(user_id, session_id)
+        session = session_service.get_session_sync(user_id, session_id)
         tool_calls = [
             e for e in session.get_events()
             if e.event_type.value == 'tool_call'

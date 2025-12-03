@@ -25,7 +25,7 @@ tiny_adk - 简化版 Agent Development Kit
 from .agents import Agent
 from .config import Config, LLMConfig, RunnerConfig, get_config, set_config
 from .events import Event, EventType
-from .runner import Runner, StatelessRunner
+from .runner import Runner
 from .session import Session, SessionService, InvocationContext
 from .tools import Tool, BaseTool, tool
 
@@ -45,7 +45,6 @@ __all__ = [
     'Event',
     'EventType',
     'Runner',
-    'StatelessRunner',  # 别名
     'Session',
     'SessionService',
     'InvocationContext',

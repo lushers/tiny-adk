@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tiny_adk import Agent, EventType, Runner, tool
+from tiny_adk import Agent, EventType, Runner, SessionService, tool
 
 
 @tool(description='执行mock的任务')
@@ -32,7 +32,10 @@ async def main():
         tools=[mock_task, get_weather],
     )
     
-    runner = Runner()
+    # 创建 SessionService 和 Runner
+    session_service = SessionService()
+    runner = Runner(session_service=session_service)
+    
     user_id = 'user_001'
     
     print('=== 异步流式执行示例 ===\n')
@@ -42,6 +45,9 @@ async def main():
     user_msg = '你好，请介绍一下你自己'
     print(f'📝 用户: {user_msg}')
     print('🤖 Agent: ', end='', flush=True)
+    
+    # 创建 Session
+    await session_service.create_session(user_id=user_id, session_id='stream_1')
     
     async for event in runner.run_async(
         agent=agent,
@@ -60,6 +66,8 @@ async def main():
     user_msg = '帮我执行一个数据分析任务'
     print(f'📝 用户: {user_msg}')
     print('🤖 Agent: ', end='', flush=True)
+    
+    await session_service.create_session(user_id=user_id, session_id='stream_2')
     
     async for event in runner.run_async(
         agent=agent,
@@ -87,6 +95,9 @@ async def main():
     
     async def stream_query(query: str, session_id: str, label: str):
         """并发流式查询"""
+        # 创建 Session
+        await session_service.create_session(user_id=user_id, session_id=session_id)
+        
         responses = []
         tool_calls = []
         

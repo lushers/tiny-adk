@@ -1,24 +1,24 @@
 """
-Runner - 无状态执行引擎
+Runner - 无状态执行引擎（参考 ADK 设计）
 
-Runner 只负责:
-- 会话管理（通过 SessionService）
+Runner 职责（单一职责）:
 - 编排 Flow 执行
-- 用户消息处理
+- 追加事件到 Session（通过 SessionService.append_event）
 
 架构:
 ┌────────────────────────────────────────┐
-│  Runner: 会话管理 + 编排               │
+│  Runner: 执行编排                       │
 ├────────────────────────────────────────┤
 │  Flow: Reason-Act 循环 + 工具执行       │
 ├────────────────────────────────────────┤
 │  Model: LLM 抽象 + 请求/响应格式化       │
 └────────────────────────────────────────┘
 
-设计理念:
+设计理念（参考 ADK）:
 - Runner 完全无状态
+- Session 必须预先存在（由调用方创建）
+- 事件追加是原子操作
 - Agent 作为参数传入
-- 支持 InvocationContext 进行追踪
 """
 
 from __future__ import annotations
@@ -40,34 +40,40 @@ logger = logging.getLogger(__name__)
 
 class Runner:
     """
-    无状态 Runner
+    无状态 Runner（参考 ADK 设计）
     
     核心设计理念:
-    - Runner 只持有基础服务（SessionService）
-    - Agent 和配置作为参数传入
-    - 每次调用都是独立的
-    - 支持追踪和监控
+    - Runner 只负责执行，不负责 Session 生命周期
+    - Session 必须预先存在（不存在则抛出 ValueError）
+    - 事件通过 append_event 原子追加
+    - Agent 作为参数传入
     
-    这种设计的好处:
-    1. Runner 可以被多个 Agent 复用
-    2. Agent 可以动态切换
-    3. 更好的可测试性
-    4. 更清晰的职责分离
+    使用方式:
+        # 1. 创建服务
+        session_service = SessionService()
+        runner = Runner(session_service=session_service)
+        
+        # 2. 显式创建 Session
+        session = await session_service.create_session(user_id="u1", session_id="s1")
+        
+        # 3. 执行
+        async for event in runner.run_async(agent, "u1", "s1", "你好"):
+            print(event)
     """
     
     def __init__(
         self,
-        session_service: SessionService | None = None,
+        session_service: SessionService,
         config: Config | None = None,
     ):
         """
         初始化 Runner
         
         Args:
-            session_service: Session 持久化服务（如果不提供，使用内存存储）
+            session_service: Session 持久化服务（必须提供）
             config: 配置对象
         """
-        self.session_service = session_service or SessionService()
+        self.session_service = session_service
         self._config = config or get_config()
     
     # ==================== 异步 API ====================
@@ -84,6 +90,8 @@ class Runner:
         """
         异步执行
         
+        前置条件: Session 必须已存在（通过 session_service.create_session 创建）
+        
         Args:
             agent: Agent 实例
             user_id: 用户 ID
@@ -94,6 +102,9 @@ class Runner:
             
         Yields:
             Event 对象
+            
+        Raises:
+            ValueError: 如果 Session 不存在
         """
         # 1. 创建 InvocationContext
         ctx = InvocationContext(
@@ -110,18 +121,20 @@ class Runner:
         )
         
         try:
-            # 2. 加载 Session
+            # 2. 获取 Session（不创建）
             ctx.session = await self.session_service.get_session(
                 user_id=user_id,
                 session_id=session_id
             )
+            if not ctx.session:
+                raise ValueError(f"Session not found: {session_id}")
             
-            # 3. 添加用户消息
+            # 3. 追加用户消息（原子操作）
             user_event = Event(
                 event_type=EventType.USER_MESSAGE,
                 content=message,
             )
-            ctx.session.add_event(user_event)
+            await self.session_service.append_event(ctx.session, user_event)
             
             # 4. 获取 LLM
             llm = agent.llm or self._create_llm()
@@ -131,6 +144,9 @@ class Runner:
             if stream:
                 async for event in agent.flow.run_stream_async(agent, ctx.session, llm):
                     event_count += 1
+                    # 非 partial 事件追加到 Session
+                    if not getattr(event, 'partial', False):
+                        await self.session_service.append_event(ctx.session, event)
                     yield event
             else:
                 result = await agent.flow.run_async(agent, ctx.session, llm)
@@ -138,13 +154,11 @@ class Runner:
                     event_type=EventType.MODEL_RESPONSE,
                     content=result,
                 )
+                await self.session_service.append_event(ctx.session, final_event)
                 event_count += 1
                 yield final_event
             
-            # 6. 保存 Session
-            await self.session_service.save_session(ctx.session)
-            
-            # 7. 记录成功
+            # 6. 记录成功
             duration = time.time() - ctx.start_time
             logger.info(
                 f"[Runner] SUCCESS invocation_id={ctx.invocation_id} "
@@ -173,6 +187,8 @@ class Runner:
         """
         同步执行（非流式）
         
+        前置条件: Session 必须已存在
+        
         Args:
             agent: Agent 实例
             user_id: 用户 ID
@@ -182,6 +198,9 @@ class Runner:
             
         Returns:
             Agent 的响应
+            
+        Raises:
+            ValueError: 如果 Session 不存在
         """
         ctx = InvocationContext(
             invocation_id=str(uuid.uuid4()),
@@ -195,17 +214,20 @@ class Runner:
         )
         
         try:
-            # 加载 Session
+            # 获取 Session（不创建）
             ctx.session = self.session_service.get_session_sync(
                 user_id=user_id,
                 session_id=session_id
             )
+            if not ctx.session:
+                raise ValueError(f"Session not found: {session_id}")
             
-            # 添加用户消息
-            ctx.session.add_event(Event(
+            # 追加用户消息（原子操作）
+            user_event = Event(
                 event_type=EventType.USER_MESSAGE,
                 content=message,
-            ))
+            )
+            self.session_service.append_event_sync(ctx.session, user_event)
             
             # 获取 LLM
             llm = agent.llm or self._create_llm()
@@ -213,8 +235,12 @@ class Runner:
             # 执行
             result = agent.flow.run(agent, ctx.session, llm)
             
-            # 保存 Session
-            self.session_service.save_session_sync(ctx.session)
+            # 追加响应事件
+            final_event = Event(
+                event_type=EventType.MODEL_RESPONSE,
+                content=result,
+            )
+            self.session_service.append_event_sync(ctx.session, final_event)
             
             duration = time.time() - ctx.start_time
             logger.info(
@@ -244,6 +270,8 @@ class Runner:
         """
         同步流式执行
         
+        前置条件: Session 必须已存在
+        
         Args:
             agent: Agent 实例
             user_id: 用户 ID
@@ -253,6 +281,9 @@ class Runner:
             
         Yields:
             Event 对象
+            
+        Raises:
+            ValueError: 如果 Session 不存在
         """
         ctx = InvocationContext(
             invocation_id=str(uuid.uuid4()),
@@ -266,17 +297,20 @@ class Runner:
         )
         
         try:
-            # 加载 Session
+            # 获取 Session（不创建）
             ctx.session = self.session_service.get_session_sync(
                 user_id=user_id,
                 session_id=session_id
             )
+            if not ctx.session:
+                raise ValueError(f"Session not found: {session_id}")
             
-            # 添加用户消息
-            ctx.session.add_event(Event(
+            # 追加用户消息（原子操作）
+            user_event = Event(
                 event_type=EventType.USER_MESSAGE,
                 content=message,
-            ))
+            )
+            self.session_service.append_event_sync(ctx.session, user_event)
             
             # 获取 LLM
             llm = agent.llm or self._create_llm()
@@ -285,10 +319,10 @@ class Runner:
             event_count = 0
             for event in agent.flow.run_stream(agent, ctx.session, llm):
                 event_count += 1
+                # 非 partial 事件追加到 Session
+                if not getattr(event, 'partial', False):
+                    self.session_service.append_event_sync(ctx.session, event)
                 yield event
-            
-            # 保存 Session
-            self.session_service.save_session_sync(ctx.session)
             
             duration = time.time() - ctx.start_time
             logger.info(
@@ -304,6 +338,40 @@ class Runner:
                 exc_info=True
             )
             raise
+    
+    # ==================== 便利方法（用于调试）====================
+    
+    async def run_debug(
+        self,
+        agent: Agent,
+        message: str,
+        user_id: str = "debug_user",
+        session_id: str = "debug_session",
+    ) -> list[Event]:
+        """
+        调试用便利方法 - 自动处理 Session 创建
+        
+        注意：仅用于调试和测试，生产环境请使用 run_async
+        
+        Args:
+            agent: Agent 实例
+            message: 用户消息
+            user_id: 用户 ID（默认 debug_user）
+            session_id: 会话 ID（默认 debug_session）
+            
+        Returns:
+            事件列表
+        """
+        # 获取或创建 Session
+        session = await self.session_service.get_session(user_id, session_id)
+        if not session:
+            session = await self.session_service.create_session(user_id, session_id)
+            logger.info(f"[Runner] Created debug session: {session_id}")
+        
+        events = []
+        async for event in self.run_async(agent, user_id, session_id, message):
+            events.append(event)
+        return events
     
     # ==================== 辅助方法 ====================
     
@@ -321,15 +389,3 @@ class Runner:
             show_thinking=self._config.runner.show_thinking,
             show_request=self._config.runner.show_request,
         )
-    
-    def get_session(self, user_id: str, session_id: str) -> Session:
-        """获取 Session（同步）"""
-        return self.session_service.get_session_sync(user_id, session_id)
-    
-    async def get_session_async(self, user_id: str, session_id: str) -> Session:
-        """获取 Session（异步）"""
-        return await self.session_service.get_session(user_id, session_id)
-
-
-# 向后兼容别名
-StatelessRunner = Runner

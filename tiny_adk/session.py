@@ -139,67 +139,144 @@ class Session:
 
 class SessionService:
     """
-    Session 持久化服务
+    Session 持久化服务（参考 ADK 设计）
     
-    负责 Session 的存储和检索，支持:
-    - 内存存储（默认，用于测试和开发）
-    - 可扩展为数据库、Redis 等持久化方案
+    设计原则:
+    - get_session: 只获取，不存在返回 None
+    - create_session: 显式创建
+    - append_event: 原子操作追加事件
+    
+    这种分离使得:
+    1. 行为可预测，没有隐式副作用
+    2. 易于扩展到分布式存储（PostgreSQL、Redis 等）
+    3. 调用方明确控制 Session 生命周期
     """
     
     def __init__(self):
         self._sessions: dict[tuple[str, str], Session] = {}
     
+    # ==================== 获取（纯获取，不创建）====================
+    
     async def get_session(
         self, 
         user_id: str, 
         session_id: str
-    ) -> Session:
+    ) -> Optional[Session]:
         """
-        获取或创建 Session
+        获取 Session
         
         Args:
             user_id: 用户 ID
             session_id: 会话 ID
             
         Returns:
-            Session 实例
+            Session 实例，不存在返回 None
         """
         key = (user_id, session_id)
-        if key not in self._sessions:
-            self._sessions[key] = Session(
-                user_id=user_id,
-                session_id=session_id
-            )
-        return self._sessions[key]
+        return self._sessions.get(key)
     
     def get_session_sync(
         self, 
         user_id: str, 
         session_id: str
-    ) -> Session:
+    ) -> Optional[Session]:
         """同步版本的获取 Session"""
         key = (user_id, session_id)
-        if key not in self._sessions:
-            self._sessions[key] = Session(
-                user_id=user_id,
-                session_id=session_id
-            )
-        return self._sessions[key]
+        return self._sessions.get(key)
     
-    async def save_session(self, session: Session) -> None:
+    # ==================== 创建（显式创建）====================
+    
+    async def create_session(
+        self,
+        user_id: str,
+        session_id: Optional[str] = None,
+        state: Optional[dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Session:
         """
-        保存 Session
+        创建新 Session
+        
+        Args:
+            user_id: 用户 ID
+            session_id: 会话 ID（可选，不提供则自动生成）
+            state: 初始状态
+            metadata: 元数据
+            
+        Returns:
+            新创建的 Session
+            
+        Raises:
+            ValueError: 如果 Session 已存在
+        """
+        session_id = session_id or str(uuid4())
+        key = (user_id, session_id)
+        
+        if key in self._sessions:
+            raise ValueError(f"Session already exists: {session_id}")
+        
+        session = Session(
+            user_id=user_id,
+            session_id=session_id,
+            state=state or {},
+            metadata=metadata or {},
+        )
+        self._sessions[key] = session
+        return session
+    
+    def create_session_sync(
+        self,
+        user_id: str,
+        session_id: Optional[str] = None,
+        state: Optional[dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Session:
+        """同步版本的创建 Session"""
+        session_id = session_id or str(uuid4())
+        key = (user_id, session_id)
+        
+        if key in self._sessions:
+            raise ValueError(f"Session already exists: {session_id}")
+        
+        session = Session(
+            user_id=user_id,
+            session_id=session_id,
+            state=state or {},
+            metadata=metadata or {},
+        )
+        self._sessions[key] = session
+        return session
+    
+    # ==================== 追加事件（原子操作）====================
+    
+    async def append_event(
+        self, 
+        session: Session, 
+        event: Event
+    ) -> None:
+        """
+        追加单个事件到 Session（原子操作）
+        
+        这是核心的事件追加方法，而不是批量保存整个 Session。
+        对于持久化存储，这里会是一个增量写入（如 INSERT INTO events）
+        而不是全量更新（如 UPDATE session SET events = ...）
         
         Args:
             session: Session 实例
+            event: 要追加的事件
         """
-        key = (session.user_id, session.session_id)
-        self._sessions[key] = session
+        session.add_event(event)
+        # 内存存储不需要额外操作
+        # 对于数据库存储，这里会是: INSERT INTO events (session_id, ...) VALUES (...)
     
-    def save_session_sync(self, session: Session) -> None:
-        """同步版本的保存 Session"""
-        key = (session.user_id, session.session_id)
-        self._sessions[key] = session
+    def append_event_sync(
+        self, 
+        session: Session, 
+        event: Event
+    ) -> None:
+        """同步版本的追加事件"""
+        session.add_event(event)
+    
+    # ==================== 删除 ====================
     
     async def delete_session(
         self, 
@@ -222,6 +299,20 @@ class SessionService:
             return True
         return False
     
+    def delete_session_sync(
+        self, 
+        user_id: str, 
+        session_id: str
+    ) -> bool:
+        """同步版本的删除 Session"""
+        key = (user_id, session_id)
+        if key in self._sessions:
+            del self._sessions[key]
+            return True
+        return False
+    
+    # ==================== 列表查询 ====================
+    
     async def list_sessions(self, user_id: str) -> list[Session]:
         """
         列出用户的所有 Session
@@ -232,6 +323,14 @@ class SessionService:
         Returns:
             Session 列表
         """
+        return [
+            session 
+            for (uid, _), session in self._sessions.items() 
+            if uid == user_id
+        ]
+    
+    def list_sessions_sync(self, user_id: str) -> list[Session]:
+        """同步版本的列出 Session"""
         return [
             session 
             for (uid, _), session in self._sessions.items() 

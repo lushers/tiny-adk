@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tiny_adk import Agent, EventType, Runner, tool
+from tiny_adk import Agent, EventType, Runner, SessionService, tool
 
 
 @tool(description='执行耗时任务')
@@ -23,9 +23,15 @@ def main():
         tools=[slow_task],
     )
     
-    runner = Runner()
+    # 创建 SessionService 和 Runner
+    session_service = SessionService()
+    runner = Runner(session_service=session_service)
+    
     user_id = 'user_001'
     session_id = 'stream_session'
+    
+    # 显式创建 Session
+    session_service.create_session_sync(user_id=user_id, session_id=session_id)
     
     print('=== 流式执行示例 ===')
     user_msg = '帮我执行一个数据分析任务'

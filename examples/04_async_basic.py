@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tiny_adk import Agent, Runner, tool
+from tiny_adk import Agent, Runner, SessionService, tool
 
 
 @tool(description='获取指定城市的当前天气信息')
@@ -42,7 +42,10 @@ async def main():
         tools=[get_weather, search_database, send_notification],
     )
     
-    runner = Runner()
+    # 创建 SessionService 和 Runner
+    session_service = SessionService()
+    runner = Runner(session_service=session_service)
+    
     user_id = 'user_001'
     
     print('=== 异步执行示例 ===\n')
@@ -50,6 +53,9 @@ async def main():
     # 示例 1: 基础异步调用
     print('--- 示例 1: 基础异步调用 ---')
     print('📝 用户: 你好，介绍一下你自己')
+    
+    # 创建 Session
+    await session_service.create_session(user_id=user_id, session_id='session_1')
     
     # 收集所有事件，获取最终响应
     response = None
@@ -67,6 +73,8 @@ async def main():
     print('--- 示例 2: 调用同步工具 ---')
     print('📝 用户: 北京天气怎么样？')
     
+    await session_service.create_session(user_id=user_id, session_id='session_2')
+    
     response = None
     async for event in runner.run_async(
         agent=agent,
@@ -81,6 +89,8 @@ async def main():
     # 示例 3: 调用异步工具
     print('--- 示例 3: 调用异步工具 ---')
     print('📝 用户: 帮我搜索一下 Python 教程')
+    
+    await session_service.create_session(user_id=user_id, session_id='session_3')
     
     response = None
     async for event in runner.run_async(
@@ -98,6 +108,9 @@ async def main():
     
     async def query_weather(city: str, sid: str) -> str:
         """并发查询天气"""
+        # 创建 Session
+        await session_service.create_session(user_id=user_id, session_id=sid)
+        
         response = None
         async for event in runner.run_async(
             agent=agent,
