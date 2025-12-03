@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any, Iterator
+from typing import Any, AsyncIterator, Iterator
 
 from .agents import Agent
 from .config import Config, get_config
@@ -94,8 +95,8 @@ class Runner:
         content=user_message,
     ))
     
-    # 2. 执行 Reason-Act 循环
-    response = self._reason_act_loop(agent, session)
+    # 2. 执行 Reason-Act 循环（从迭代 0 开始）
+    response = self._reason_act_loop(agent, session, iteration=0)
     
     return response
   
@@ -117,13 +118,64 @@ class Runner:
         content=user_message,
     ))
     
-    # 2. 执行并流式返回 Agent 的事件
-    yield from self._reason_act_loop_stream(agent, session)
+    # 2. 执行并流式返回 Agent 的事件（从迭代 0 开始）
+    yield from self._reason_act_loop_stream(agent, session, iteration=0)
+  
+  async def run_async(
+      self,
+      agent: Agent,
+      session: Session,
+      user_message: str,
+  ) -> str:
+    """
+    异步执行一轮对话
+    
+    Args:
+      agent: 要执行的 Agent
+      session: 会话对象
+      user_message: 用户消息
+    
+    Returns:
+      Agent 的最终响应
+    """
+    # 1. 记录用户消息事件
+    session.add_event(Event(
+        event_type=EventType.USER_MESSAGE,
+        content=user_message,
+    ))
+    
+    # 2. 执行 Reason-Act 循环（从迭代 0 开始）
+    response = await self._reason_act_loop_async(agent, session, iteration=0)
+    
+    return response
+  
+  async def run_stream_async(
+      self,
+      agent: Agent,
+      session: Session,
+      user_message: str,
+  ) -> AsyncIterator[Event]:
+    """
+    异步流式执行 - 实时返回事件
+    
+    只返回 Agent 的响应和工具调用事件，不返回用户消息
+    用户消息会被记录到 session 中，但不会 yield
+    """
+    # 1. 记录用户消息到 session（不 yield）
+    session.add_event(Event(
+        event_type=EventType.USER_MESSAGE,
+        content=user_message,
+    ))
+    
+    # 2. 执行并流式返回 Agent 的事件（从迭代 0 开始）
+    async for event in self._reason_act_loop_stream_async(agent, session, iteration=0):
+      yield event
   
   def _reason_act_loop(
       self,
       agent: Agent,
       session: Session,
+      iteration: int = 0,
   ) -> str:
     """
     Reason-Act 循环的简化实现
@@ -135,7 +187,21 @@ class Runner:
     - 支持多轮工具调用
     
     这里用简化的逻辑展示核心流程
+    
+    Args:
+      agent: 要执行的 Agent
+      session: 会话对象
+      iteration: 当前迭代次数（用于防止无限循环）
     """
+    # 检查是否超过最大迭代次数（使用 Agent 的配置）
+    if iteration >= agent.max_iterations:
+      error_msg = f"⚠️ 达到最大迭代次数限制 ({agent.max_iterations})，停止执行"
+      session.add_event(Event(
+          event_type=EventType.ERROR,
+          content={'error': error_msg, 'iteration': iteration},
+      ))
+      return error_msg
+    
     # 构建请求
     messages = self._build_messages(agent, session)
     
@@ -157,8 +223,8 @@ class Runner:
       for tool_call in response['tool_calls']:
         self._execute_tool(agent, session, tool_call)
       
-      # 递归继续循环（工具执行后让 LLM 继续）
-      return self._reason_act_loop(agent, session)
+      # 递归继续循环（工具执行后让 LLM 继续，迭代次数 +1）
+      return self._reason_act_loop(agent, session, iteration=iteration + 1)
     
     return response['content']
   
@@ -166,8 +232,27 @@ class Runner:
       self,
       agent: Agent,
       session: Session,
+      iteration: int = 0,
   ) -> Iterator[Event]:
-    """流式版本的 Reason-Act 循环 - 真正的流式输出"""
+    """
+    流式版本的 Reason-Act 循环 - 真正的流式输出
+    
+    Args:
+      agent: 要执行的 Agent
+      session: 会话对象
+      iteration: 当前迭代次数（用于防止无限循环）
+    """
+    # 检查是否超过最大迭代次数（使用 Agent 的配置）
+    if iteration >= agent.max_iterations:
+      error_msg = f"⚠️ 达到最大迭代次数限制 ({agent.max_iterations})，停止执行"
+      error_event = Event(
+          event_type=EventType.ERROR,
+          content={'error': error_msg, 'iteration': iteration},
+      )
+      session.add_event(error_event)
+      yield error_event
+      return
+    
     messages = self._build_messages(agent, session)
     
     # 使用流式调用或模拟响应
@@ -195,7 +280,10 @@ class Runner:
           yield Event(
               event_type=EventType.MODEL_RESPONSE_DELTA,
               content=chunk['delta'],
-              metadata={'type': 'delta'},
+              metadata={
+                  'type': 'delta',
+                  'chunk_index': chunk.get('chunk_index'),
+              },
           )
         elif chunk.get('done'):
           # 完整响应
@@ -227,8 +315,149 @@ class Runner:
       for tool_call in response['tool_calls']:
         yield from self._execute_tool_stream(agent, session, tool_call)
       
-      # 继续循环
-      yield from self._reason_act_loop_stream(agent, session)
+      # 继续循环（迭代次数 +1）
+      yield from self._reason_act_loop_stream(agent, session, iteration=iteration + 1)
+  
+  async def _reason_act_loop_async(
+      self,
+      agent: Agent,
+      session: Session,
+      iteration: int = 0,
+  ) -> str:
+    """
+    异步版本的 Reason-Act 循环
+    
+    Args:
+      agent: 要执行的 Agent
+      session: 会话对象
+      iteration: 当前迭代次数（用于防止无限循环）
+    """
+    # 检查是否超过最大迭代次数（使用 Agent 的配置）
+    if iteration >= agent.max_iterations:
+      error_msg = f"⚠️ 达到最大迭代次数限制 ({agent.max_iterations})，停止执行"
+      session.add_event(Event(
+          event_type=EventType.ERROR,
+          content={'error': error_msg, 'iteration': iteration},
+      ))
+      return error_msg
+    
+    # 构建请求
+    messages = self._build_messages(agent, session)
+    
+    # 异步调用 LLM
+    if self.llm_client is None:
+      response = self._mock_llm_response(agent, messages)
+    else:
+      response = await self._call_llm_async(agent, messages)
+    
+    # 记录模型响应
+    session.add_event(Event(
+        event_type=EventType.MODEL_RESPONSE,
+        content=response['content'],
+        metadata=response.get('metadata', {}),
+    ))
+    
+    # 如果有工具调用，执行工具
+    if 'tool_calls' in response:
+      for tool_call in response['tool_calls']:
+        await self._execute_tool_async(agent, session, tool_call)
+      
+      # 递归继续循环（工具执行后让 LLM 继续，迭代次数 +1）
+      return await self._reason_act_loop_async(agent, session, iteration=iteration + 1)
+    
+    return response['content']
+  
+  async def _reason_act_loop_stream_async(
+      self,
+      agent: Agent,
+      session: Session,
+      iteration: int = 0,
+  ) -> AsyncIterator[Event]:
+    """
+    异步流式版本的 Reason-Act 循环
+    
+    Args:
+      agent: 要执行的 Agent
+      session: 会话对象
+      iteration: 当前迭代次数（用于防止无限循环）
+    """
+    # 检查是否超过最大迭代次数（使用 Agent 的配置）
+    if iteration >= agent.max_iterations:
+      error_msg = f"⚠️ 达到最大迭代次数限制 ({agent.max_iterations})，停止执行"
+      error_event = Event(
+          event_type=EventType.ERROR,
+          content={'error': error_msg, 'iteration': iteration},
+      )
+      session.add_event(error_event)
+      yield error_event
+      return
+    
+    messages = self._build_messages(agent, session)
+    
+    # 使用异步流式调用或模拟响应
+    if self.llm_client is None:
+      # 模拟流式响应
+      response = self._mock_llm_response(agent, messages)
+      event = Event(
+          event_type=EventType.MODEL_RESPONSE,
+          content=response['content'],
+          metadata=response.get('metadata', {}),
+      )
+      session.add_event(event)
+      yield event
+    else:
+      # 真正的异步流式 LLM 调用
+      full_content = ''
+      full_response = None
+      
+      # 逐步接收流式响应
+      async for chunk in self._call_llm_stream_async(agent, messages):
+        if chunk.get('type') == 'content':
+          # 流式内容片段
+          full_content += chunk['delta']
+          # 实时 yield 内容事件
+          yield Event(
+              event_type=EventType.MODEL_RESPONSE_DELTA,
+              content=chunk['delta'],
+              metadata={
+                  'type': 'delta',
+                  'chunk_index': chunk.get('chunk_index'),
+              },
+          )
+        elif chunk.get('done'):
+          # 完整响应
+          full_response = chunk
+      
+      # 保存完整响应到 session
+      if full_response:
+        response = full_response
+        event = Event(
+            event_type=EventType.MODEL_RESPONSE,
+            content=response['content'],
+            metadata=response.get('metadata', {}),
+        )
+        session.add_event(event)
+        yield event
+      else:
+        # 如果没有收到完整响应，使用累积的内容
+        response = {'content': full_content}
+        event = Event(
+            event_type=EventType.MODEL_RESPONSE,
+            content=full_content,
+            metadata={},
+        )
+        session.add_event(event)
+        yield event
+    
+    # 处理工具调用
+    if 'tool_calls' in response:
+      for tool_call in response['tool_calls']:
+        async for event in self._execute_tool_stream_async(agent, session, tool_call):
+          yield event
+      
+      # 继续循环（迭代次数 +1）
+      async for event in self._reason_act_loop_stream_async(agent, session, iteration=iteration + 1):
+        yield event
   
   def _build_messages(
       self,
@@ -412,17 +641,39 @@ class Runner:
           'stream': True,  # 启用流式模式
       }
       
-      # 可选：打印请求参数
-      if self.show_request:
-        print('--------------------------------')
-        print('LLM 流式请求参数:')
-        print({**request_params, 'stream': True})
-        print('--------------------------------')
-      
       # 如果有工具，添加工具定义
       if tools:
         request_params['tools'] = tools
         request_params['tool_choice'] = 'auto'
+      
+      # 打印请求（在添加 tools 之后）
+      if self.show_request:
+        print('================================')
+        print('LLM 流式请求参数:')
+        print(f"  model: {request_params['model']}")
+        print(f"  temperature: {request_params['temperature']}")
+        print(f"  max_tokens: {request_params['max_tokens']}")
+        if tools:
+          print(f"  tools: {[t['function']['name'] for t in tools]}")
+        print(f"  messages ({len(messages)} 条):")
+        for i, msg in enumerate(messages):
+          role = msg['role']
+          content = msg.get('content', '')
+          if role == 'system':
+            print(f"    {i+1}. [{role}]")
+            for line in (content or '').split('\n')[:10]:
+              print(f"        {line}")
+            if content and content.count('\n') > 10:
+              print(f"        ... (共 {content.count(chr(10))+1} 行)")
+          elif role == 'tool':
+            print(f"    {i+1}. [{role}] id={msg.get('tool_call_id')} → {content[:100]}")
+          elif msg.get('tool_calls'):
+            for tc in msg['tool_calls']:
+              print(f"    {i+1}. [{role}] 🔧 {tc['function']['name']}({tc['function']['arguments']})")
+          else:
+            preview = (content[:150] + '...') if content and len(content) > 150 else (content or '(空)')
+            print(f"    {i+1}. [{role}] {preview}")
+        print('================================')
       
       # 流式调用 API
       stream = self.llm_client.chat.completions.create(**request_params)
@@ -435,6 +686,7 @@ class Runner:
       
       # 创建思考内容过滤器（用于清洗对话历史）
       thinking_filter = self._StreamThinkingFilter()
+      chunk_index = 0  # chunk 计数器
       
       # 逐步处理流式响应
       for chunk in stream:
@@ -461,6 +713,7 @@ class Runner:
             yield {
                 'delta': delta.content,  # 原始内容，包含 <think> 标签
                 'type': 'content',
+                'chunk_index': chunk_index,
             }
           else:
             # 不显示 thinking：只输出过滤后的内容
@@ -468,16 +721,36 @@ class Runner:
               yield {
                   'delta': filtered_delta,
                   'type': 'content',
+                  'chunk_index': chunk_index,
               }
+          chunk_index += 1
         
-        # 处理工具调用
+        # 处理工具调用（流式中需要按 index 合并参数）
+        # OpenAI 流式 API: 第一个 chunk 有 id/name, 后续 chunks 只有 index 和 arguments
         if delta.tool_calls:
           for tc in delta.tool_calls:
-            tool_calls_data.append({
-                'id': tc.id,
-                'name': tc.function.name if tc.function else None,
-                'arguments': tc.function.arguments if tc.function else None,
-            })
+            tc_index = tc.index  # 使用 index 来标识工具调用
+            tc_id = tc.id
+            tc_name = tc.function.name if tc.function else None
+            tc_args = tc.function.arguments if tc.function else ''
+            
+            # 按 index 查找是否已存在该工具调用
+            if tc_index < len(tool_calls_data):
+              # 合并到现有记录
+              existing = tool_calls_data[tc_index]
+              if tc_args:
+                existing['arguments'] = (existing.get('arguments') or '') + tc_args
+              if tc_id:
+                existing['id'] = tc_id
+              if tc_name:
+                existing['name'] = tc_name
+            else:
+              # 新增工具调用
+              tool_calls_data.append({
+                  'id': tc_id,
+                  'name': tc_name,
+                  'arguments': tc_args or '',
+              })
         
         # 处理完成原因
         if choice.finish_reason:
@@ -508,14 +781,18 @@ class Runner:
       
       # 如果有工具调用，添加到结果中
       if tool_calls_data:
-        # 合并工具调用数据
+        # 解析合并后的工具调用
         merged_tool_calls = []
         for tc in tool_calls_data:
           if tc.get('name'):
+            try:
+              args = json.loads(tc.get('arguments') or '{}')
+            except json.JSONDecodeError:
+              args = {}
             merged_tool_calls.append({
                 'id': tc.get('id', 'call_unknown'),
                 'name': tc['name'],
-                'arguments': json.loads(tc.get('arguments', '{}')),
+                'arguments': args,
             })
         
         if merged_tool_calls:
@@ -641,6 +918,323 @@ class Runner:
       # 错误处理
       return {
           'content': f"LLM 调用失败: {str(e)}",
+          'metadata': {'error': str(e)},
+      }
+  
+  async def _call_llm_async(
+      self,
+      agent: Agent,
+      messages: list[dict[str, Any]],
+  ) -> dict[str, Any]:
+    """
+    异步调用 OpenAI 兼容的 LLM - 非流式版本
+    
+    支持:
+    - 文本生成
+    - 函数调用（如果模型支持）
+    - 思考内容分离（不污染对话历史）
+    """
+    if not self.llm_client:
+      raise ValueError(
+          "未配置 LLM 客户端。请在初始化 Runner 时提供 llm_client 或 api_base"
+      )
+    
+    # 准备工具定义（如果有）
+    tools = None
+    if agent.tools:
+      tools = [self._tool_to_openai_format(tool) for tool in agent.tools]
+    
+    try:
+      # 使用 agent.model，如果为空或是默认值 'gpt-4'，则使用 runner 的默认模型
+      model_to_use = agent.model
+      if not model_to_use or model_to_use == 'gpt-4':
+        model_to_use = self.default_model
+      
+      # 构建请求参数
+      request_params = {
+          'model': model_to_use,
+          'messages': messages,
+          'temperature': agent.temperature,
+          'max_tokens': agent.max_tokens,
+      }
+
+      # 可选：打印请求参数
+      if self.show_request:
+        print('--------------------------------')
+        print('LLM 异步请求参数:')
+        print(request_params)
+        print('--------------------------------')
+      
+      # 如果有工具，添加工具定义
+      if tools:
+        request_params['tools'] = tools
+        request_params['tool_choice'] = 'auto'
+      
+      # 检查是否有异步客户端
+      if hasattr(self.llm_client, 'chat') and hasattr(self.llm_client.chat.completions, 'create'):
+        # 使用 asyncio.to_thread 在线程池中运行同步调用
+        # 这样可以不阻塞事件循环
+        response = await asyncio.to_thread(
+            self.llm_client.chat.completions.create,
+            **request_params
+        )
+      else:
+        raise ValueError("LLM 客户端不支持异步调用")
+      
+      # 解析响应
+      choice = response.choices[0]
+      message = choice.message
+      
+      # 提取原始内容
+      raw_content = message.content or ''
+      
+      # 分离思考内容和实际输出
+      clean_content, thinking = self._extract_thinking_content(raw_content)
+      
+      # 可选：打印思考过程（用于调试）
+      if thinking and self.show_thinking:
+        print('--------------------------------')
+        print('💭 Agent 思考过程:')
+        print(thinking)
+        print('--------------------------------')
+      
+      # 检查是否有工具调用
+      if message.tool_calls:
+        return {
+            'content': clean_content,
+            'tool_calls': [
+                {
+                    'id': tc.id,
+                    'name': tc.function.name,
+                    'arguments': json.loads(tc.function.arguments),
+                }
+                for tc in message.tool_calls
+            ],
+            'metadata': {
+                'model': response.model,
+                'finish_reason': choice.finish_reason,
+                'thinking': thinking,
+                'raw_content': raw_content,
+            },
+        }
+      
+      # 普通文本响应
+      return {
+          'content': clean_content,
+          'metadata': {
+              'model': response.model,
+              'finish_reason': choice.finish_reason,
+              'thinking': thinking,
+              'raw_content': raw_content,
+              'usage': {
+                  'prompt_tokens': response.usage.prompt_tokens,
+                  'completion_tokens': response.usage.completion_tokens,
+                  'total_tokens': response.usage.total_tokens,
+              } if response.usage else {},
+          },
+      }
+    
+    except Exception as e:
+      return {
+          'content': f"LLM 异步调用失败: {str(e)}",
+          'metadata': {'error': str(e)},
+      }
+  
+  async def _call_llm_stream_async(
+      self,
+      agent: Agent,
+      messages: list[dict[str, Any]],
+  ) -> AsyncIterator[dict[str, Any]]:
+    """
+    异步流式调用 LLM - 实时返回生成的内容片段
+    
+    Yields:
+      包含 'delta' (内容片段) 或 'done' (完整响应) 的字典
+    """
+    if not self.llm_client:
+      raise ValueError(
+          "未配置 LLM 客户端。请在初始化 Runner 时提供 llm_client 或 api_base"
+      )
+    
+    # 准备工具定义（如果有）
+    tools = None
+    if agent.tools:
+      tools = [self._tool_to_openai_format(tool) for tool in agent.tools]
+    
+    try:
+      model_to_use = agent.model
+      if not model_to_use or model_to_use == 'gpt-4':
+        model_to_use = self.default_model
+      
+      # 构建请求参数
+      request_params = {
+          'model': model_to_use,
+          'messages': messages,
+          'temperature': agent.temperature,
+          'max_tokens': agent.max_tokens,
+          'stream': True,
+      }
+      
+      if tools:
+        request_params['tools'] = tools
+        request_params['tool_choice'] = 'auto'
+      
+      # 打印请求（在添加 tools 之后）
+      if self.show_request:
+        print('================================')
+        print('LLM 异步流式请求参数:')
+        print(f"  model: {request_params['model']}")
+        print(f"  temperature: {request_params['temperature']}")
+        print(f"  max_tokens: {request_params['max_tokens']}")
+        if tools:
+          print(f"  tools: {[t['function']['name'] for t in tools]}")
+        print(f"  messages ({len(messages)} 条):")
+        for i, msg in enumerate(messages):
+          role = msg['role']
+          content = msg.get('content', '')
+          if role == 'system':
+            # system prompt 完整打印
+            print(f"    {i+1}. [{role}]")
+            for line in (content or '').split('\n')[:10]:  # 最多显示10行
+              print(f"        {line}")
+            if content and content.count('\n') > 10:
+              print(f"        ... (共 {content.count(chr(10))+1} 行)")
+          elif role == 'tool':
+            print(f"    {i+1}. [{role}] id={msg.get('tool_call_id')} → {content[:100]}")
+          elif msg.get('tool_calls'):
+            for tc in msg['tool_calls']:
+              print(f"    {i+1}. [{role}] 🔧 {tc['function']['name']}({tc['function']['arguments']})")
+          else:
+            preview = (content[:150] + '...') if content and len(content) > 150 else (content or '(空)')
+            print(f"    {i+1}. [{role}] {preview}")
+        print('================================')
+      
+      # 使用同步流式调用，通过队列传递数据
+      # 注意：这是一个简化实现，真正的异步流式需要 AsyncOpenAI 客户端
+      stream = await asyncio.to_thread(
+          self.llm_client.chat.completions.create,
+          **request_params
+      )
+      
+      # 收集完整响应
+      full_content = ''
+      tool_calls_data = []
+      finish_reason = None
+      model_name = None
+      chunk_index = 0  # chunk 计数器
+      
+      # 创建思考内容过滤器
+      thinking_filter = self._StreamThinkingFilter()
+      
+      # 处理流式响应
+      for chunk in stream:
+        if not chunk.choices:
+          continue
+        
+        choice = chunk.choices[0]
+        delta = choice.delta
+        
+        if chunk.model:
+          model_name = chunk.model
+        
+        # 处理内容片段
+        if delta.content:
+          full_content += delta.content
+          filtered_delta = thinking_filter.process_delta(delta.content)
+          
+          if self.show_thinking:
+            yield {
+                'delta': delta.content,
+                'type': 'content',
+                'chunk_index': chunk_index,
+            }
+          else:
+            if filtered_delta:
+              yield {
+                  'delta': filtered_delta,
+                  'type': 'content',
+                  'chunk_index': chunk_index,
+              }
+          chunk_index += 1
+        
+        # 处理工具调用（流式中需要按 index 合并参数）
+        # OpenAI 流式 API: 第一个 chunk 有 id/name, 后续 chunks 只有 index 和 arguments
+        if delta.tool_calls:
+          for tc in delta.tool_calls:
+            tc_index = tc.index  # 使用 index 来标识工具调用
+            tc_id = tc.id
+            tc_name = tc.function.name if tc.function else None
+            tc_args = tc.function.arguments if tc.function else ''
+            
+            # 按 index 查找是否已存在该工具调用
+            if tc_index < len(tool_calls_data):
+              # 合并到现有记录
+              existing = tool_calls_data[tc_index]
+              if tc_args:
+                existing['arguments'] = (existing.get('arguments') or '') + tc_args
+              if tc_id:
+                existing['id'] = tc_id
+              if tc_name:
+                existing['name'] = tc_name
+            else:
+              # 新增工具调用
+              tool_calls_data.append({
+                  'id': tc_id,
+                  'name': tc_name,
+                  'arguments': tc_args or '',
+              })
+        
+        if choice.finish_reason:
+          finish_reason = choice.finish_reason
+        
+        # 让出控制权给事件循环
+        await asyncio.sleep(0)
+      
+      # 完成过滤
+      clean_content, thinking, remaining = thinking_filter.finalize()
+      
+      if not self.show_thinking and remaining:
+        yield {
+            'delta': remaining,
+            'type': 'content',
+        }
+      
+      # 返回完整响应
+      result = {
+          'done': True,
+          'content': clean_content,
+          'raw_content': full_content,
+          'metadata': {
+              'model': model_name or model_to_use,
+              'finish_reason': finish_reason,
+              'thinking': thinking,
+          },
+      }
+      
+      if tool_calls_data:
+        # 解析合并后的工具调用
+        merged_tool_calls = []
+        for tc in tool_calls_data:
+          if tc.get('name'):
+            try:
+              args = json.loads(tc.get('arguments') or '{}')
+            except json.JSONDecodeError:
+              args = {}
+            merged_tool_calls.append({
+                'id': tc.get('id', 'call_unknown'),
+                'name': tc['name'],
+                'arguments': args,
+            })
+        
+        if merged_tool_calls:
+          result['tool_calls'] = merged_tool_calls
+      
+      yield result
+    
+    except Exception as e:
+      yield {
+          'done': True,
+          'content': f"LLM 异步流式调用失败: {str(e)}",
           'metadata': {'error': str(e)},
       }
   
@@ -853,6 +1447,103 @@ class Runner:
           args = json.loads(args)
         
         result = tool.execute(**args)
+        
+        event = Event(
+            event_type=EventType.TOOL_RESPONSE,
+            content={
+                'call_id': tool_call.get('id'),
+                'name': tool_call['name'],
+                'result': str(result),
+            },
+        )
+        session.add_event(event)
+        yield event
+      except Exception as e:
+        event = Event(
+            event_type=EventType.ERROR,
+            content={'tool': tool_call['name'], 'error': str(e)},
+        )
+        session.add_event(event)
+        yield event
+  
+  async def _execute_tool_async(
+      self,
+      agent: Agent,
+      session: Session,
+      tool_call: dict[str, Any],
+  ) -> None:
+    """异步执行工具调用"""
+    # 记录工具调用事件
+    session.add_event(Event(
+        event_type=EventType.TOOL_CALL,
+        content=tool_call,
+    ))
+    
+    # 查找并执行工具
+    tool = self._find_tool(agent, tool_call['name'])
+    if tool:
+      try:
+        # 解析参数
+        args = tool_call.get('arguments', {})
+        if isinstance(args, str):
+          args = json.loads(args)
+        
+        # 执行工具（支持同步和异步工具）
+        import inspect
+        if inspect.iscoroutinefunction(tool.func):
+          # 异步工具
+          result = await tool.func(**args)
+        else:
+          # 同步工具，在线程池中执行避免阻塞
+          result = await asyncio.to_thread(tool.execute, **args)
+        
+        # 记录工具响应
+        session.add_event(Event(
+            event_type=EventType.TOOL_RESPONSE,
+            content={
+                'call_id': tool_call.get('id'),
+                'name': tool_call['name'],
+                'result': str(result),
+            },
+        ))
+      except Exception as e:
+        # 记录错误
+        session.add_event(Event(
+            event_type=EventType.ERROR,
+            content={
+                'tool': tool_call['name'],
+                'error': str(e),
+            },
+        ))
+  
+  async def _execute_tool_stream_async(
+      self,
+      agent: Agent,
+      session: Session,
+      tool_call: dict[str, Any],
+  ) -> AsyncIterator[Event]:
+    """异步流式执行工具"""
+    # 工具调用事件
+    event = Event(event_type=EventType.TOOL_CALL, content=tool_call)
+    session.add_event(event)
+    yield event
+    
+    # 执行工具
+    tool = self._find_tool(agent, tool_call['name'])
+    if tool:
+      try:
+        args = tool_call.get('arguments', {})
+        if isinstance(args, str):
+          args = json.loads(args)
+        
+        # 执行工具（支持同步和异步工具）
+        import inspect
+        if inspect.iscoroutinefunction(tool.func):
+          # 异步工具
+          result = await tool.func(**args)
+        else:
+          # 同步工具，在线程池中执行避免阻塞
+          result = await asyncio.to_thread(tool.execute, **args)
         
         event = Event(
             event_type=EventType.TOOL_RESPONSE,

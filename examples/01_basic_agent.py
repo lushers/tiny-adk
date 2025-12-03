@@ -13,6 +13,7 @@ def main():
       name='助手pil',
       instruction='你是一个友好的助手，由philister提供，帮助用户解答问题。',
       model='QuantTrio/MiniMax-M2-AWQ',  # 使用真实模型
+      max_iterations=10,
   )
   
   # 2. 创建 Session - 维护对话状态

@@ -30,6 +30,7 @@ class Agent:
   tools: list[Tool] = field(default_factory=list)
   temperature: float = 0.7
   max_tokens: int = 2000
+  max_iterations: int = 10  # 默认允许 10 次迭代（工具调用循环）
   
   def to_dict(self) -> dict[str, Any]:
     """转换为字典（用于序列化）"""
@@ -41,6 +42,7 @@ class Agent:
         'tools': [t.to_function_declaration() for t in self.tools],
         'temperature': self.temperature,
         'max_tokens': self.max_tokens,
+        'max_iterations': self.max_iterations,
     }
   
   def get_system_prompt(self) -> str:
