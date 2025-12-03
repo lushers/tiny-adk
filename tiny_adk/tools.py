@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -25,8 +26,13 @@ class Tool:
       self.parameters = self._extract_parameters()
   
   def _extract_parameters(self) -> dict[str, Any]:
-    """从函数签名提取参数定义"""
+    """从函数签名和 docstring 提取参数定义"""
     sig = inspect.signature(self.func)
+    docstring = inspect.getdoc(self.func) or ''
+    
+    # 解析 docstring 中的参数描述（支持 Google 风格）
+    param_descriptions = self._parse_docstring_params(docstring)
+    
     params = {}
     
     for name, param in sig.parameters.items():
@@ -40,9 +46,49 @@ class Tool:
       if param.default != inspect.Parameter.empty:
         param_info['default'] = param.default
       
+      # 从 docstring 获取参数描述
+      if name in param_descriptions:
+        param_info['description'] = param_descriptions[name]
+      
       params[name] = param_info
     
     return params
+  
+  def _parse_docstring_params(self, docstring: str) -> dict[str, str]:
+    """
+    解析 docstring 中的参数描述
+    
+    支持 Google 风格:
+      Args:
+        city: 城市名称
+        date: 查询日期
+    
+    和简单风格:
+      :param city: 城市名称
+    """
+    descriptions = {}
+    
+    if not docstring:
+      return descriptions
+    
+    # Google 风格: Args: 部分
+    args_match = re.search(r'Args?:\s*\n((?:\s+\w+.*\n?)+)', docstring, re.IGNORECASE)
+    if args_match:
+      args_section = args_match.group(1)
+      # 匹配 "param_name: description" 或 "param_name (type): description"
+      for match in re.finditer(r'^\s+(\w+)(?:\s*\([^)]*\))?:\s*(.+?)(?=\n\s+\w+|\n\n|\Z)', 
+                                args_section, re.MULTILINE | re.DOTALL):
+        param_name = match.group(1)
+        description = match.group(2).strip().replace('\n', ' ')
+        descriptions[param_name] = description
+    
+    # Sphinx 风格: :param name: description
+    for match in re.finditer(r':param\s+(\w+):\s*(.+?)(?=:|$)', docstring, re.MULTILINE):
+      param_name = match.group(1)
+      description = match.group(2).strip()
+      descriptions[param_name] = description
+    
+    return descriptions
   
   def execute(self, **kwargs: Any) -> Any:
     """执行工具函数"""

@@ -109,6 +109,49 @@ python 05_multiple_agents.py
 
 ---
 
+### 06_async_basic.py - 异步执行
+
+**学习目标**:
+- 使用 async/await 语法执行 Agent
+- 理解同步和异步工具的区别
+- 学习如何并发执行多个 Agent 任务
+
+**核心概念**:
+```python
+run_async()           → 异步执行一轮对话
+async def tool()      → 定义异步工具
+asyncio.gather()      → 并发执行多个任务
+asyncio.to_thread()   → 同步工具不阻塞事件循环
+```
+
+**运行**:
+```bash
+python 06_async_basic.py
+```
+
+---
+
+### 07_async_streaming.py - 异步流式执行
+
+**学习目标**:
+- 使用 run_stream_async() 异步流式获取事件
+- 理解异步生成器的使用
+- 学习如何并发处理多个流式请求
+
+**核心概念**:
+```python
+run_stream_async()    → 异步流式执行
+async for event in    → 异步迭代事件
+并发流式              → 同时处理多个请求
+```
+
+**运行**:
+```bash
+python 07_async_streaming.py
+```
+
+---
+
 ## 🎓 建议学习顺序
 
 1. **第一步**: 运行 `01_basic_agent.py`
@@ -130,6 +173,14 @@ python 05_multiple_agents.py
 5. **第五步**: 运行 `05_multiple_agents.py`
    - 理解多 Agent 系统
    - 学习如何组织复杂应用
+
+6. **第六步**: 运行 `06_async_basic.py`
+   - 学习异步执行模式
+   - 掌握异步工具定义
+
+7. **第七步**: 运行 `07_async_streaming.py`
+   - 学习异步流式处理
+   - 掌握并发任务执行
 
 ## 💡 常见问题
 
@@ -162,12 +213,31 @@ with open('session.json', 'r') as f:
 
 ### Q: 如何实现异步执行？
 
-A: 将 Runner 的方法改为 async:
+A: 使用 Runner 的异步方法：
 ```python
-async def run_async(self, agent, session, message):
-    # 异步实现
-    response = await self._call_llm_async(...)
-    return response
+import asyncio
+
+async def main():
+    runner = Runner()
+    agent = Agent(name='助手', instruction='...')
+    session = Session()
+    
+    # 异步执行
+    response = await runner.run_async(agent, session, "你好")
+    
+    # 异步流式执行
+    async for event in runner.run_stream_async(agent, session, "问题"):
+        print(event.content)
+
+asyncio.run(main())
+```
+
+也支持定义异步工具：
+```python
+@tool(description='异步数据库查询')
+async def query_db(sql: str) -> str:
+    result = await database.execute(sql)
+    return str(result)
 ```
 
 ### Q: 错误处理怎么做？
@@ -197,9 +267,10 @@ except Exception as e:
    - Redis
    - 文件系统
 
-3. **实现异步**
-   - async/await
-   - asyncio
+3. **异步功能** ✅ 已实现
+   - `run_async()` - 异步执行
+   - `run_stream_async()` - 异步流式
+   - 支持异步工具定义
 
 4. **添加监控**
    - 日志记录

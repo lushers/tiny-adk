@@ -34,7 +34,8 @@ class RunnerConfig:
     """Runner 运行时配置"""
     show_thinking: bool = False
     show_request: bool = False
-    max_iterations: int = 10
+    # 注意：max_iterations 应该在 Agent 级别配置，不在 Runner 级别
+    # 这符合 Google ADK 的设计理念：Agent 是配置，Runner 是无状态执行引擎
 
 
 @dataclass
@@ -161,9 +162,6 @@ class Config:
         
         if show_request := os.getenv(f"{prefix}SHOW_REQUEST"):
             self.runner.show_request = show_request.lower() in ('true', '1', 'yes')
-        
-        if max_iterations := os.getenv(f"{prefix}MAX_ITERATIONS"):
-            self.runner.max_iterations = int(max_iterations)
     
     def _apply_dict(self, data: dict[str, Any]) -> None:
         """从字典应用配置"""
@@ -186,8 +184,6 @@ class Config:
                 self.runner.show_thinking = runner_data["show_thinking"]
             if "show_request" in runner_data:
                 self.runner.show_request = runner_data["show_request"]
-            if "max_iterations" in runner_data:
-                self.runner.max_iterations = runner_data["max_iterations"]
     
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -203,7 +199,6 @@ class Config:
             "runner": {
                 "show_thinking": self.runner.show_thinking,
                 "show_request": self.runner.show_request,
-                "max_iterations": self.runner.max_iterations,
             },
         }
     

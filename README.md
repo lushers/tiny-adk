@@ -1,11 +1,11 @@
-# Tiny ADK - 简化版 Agent Development Kit
+# Tiny ADK
 
-这是 Google ADK 的简化版本，保留了核心概念和框架设计，但用更简洁的代码实现。
+这是受到 Google ADK 启发的简单版本，保留了部分核心概念和框架设计，但用更简洁的代码实现。
 
 ## 🎯 设计目标
 
 - **保留核心概念**：Agent, Runner, Tool, Session, Event, Config
-- **简化实现**：从 2600+ 测试、236+ 文件简化到 ~1000 行核心代码
+- **简化实现**：从 2600+ 测试、236+ 文件简化到 ~1000 行核心代码；现在发现越改越多了~
 - **清晰易懂**：每个概念都有详细注释说明设计理念
 - **完整可运行**：虽然简化，但保持了完整的执行流程
 
@@ -45,6 +45,8 @@ session = Session()
 - 可以跨进程、跨时间持久化
 
 ### 3. Runner - 无状态执行引擎
+
+这里相较于原本的runner，完全是无状态的；只在run时传入相应的agent, 目前发现也有一定的问题主要就是tracking不好进行
 
 ```python
 from tiny_adk import Runner
@@ -107,154 +109,6 @@ config = Config.load(config_file="my_config.yaml")
 - 支持环境变量覆盖
 - 配置优先级：代码参数 > 环境变量 > 配置文件 > 默认值
 
-## 🚀 快速开始
-
-### 基础示例（不需要真实 LLM）
-
-```python
-from tiny_adk import Agent, Runner, Session
-
-# 1. 创建 Agent
-agent = Agent(
-    name='助手',
-    instruction='你是一个友好的助手'
-)
-
-# 2. 创建 Session 和 Runner
-session = Session()
-runner = Runner()  # 使用模拟的 LLM 响应
-
-# 3. 执行对话
-response = runner.run(agent, session, "你好！")
-print(response)
-```
-
-### 🔥 使用真实 LLM
-
-**方式一：使用配置文件（推荐）**
-
-创建 `tiny_adk.yaml` 配置文件：
-
-```yaml
-llm:
-  api_base: "http://localhost:8000/v1"
-  api_key: "EMPTY"
-  model: "Qwen/Qwen2.5-7B-Instruct"
-
-runner:
-  show_thinking: false
-  show_request: false
-```
-
-然后直接使用：
-
-```python
-from tiny_adk import Agent, Runner, Session
-
-# Runner 会自动读取 tiny_adk.yaml 配置
-runner = Runner()
-
-agent = Agent(
-    name='智能助手',
-    instruction='你是一个有帮助的AI助手。',
-)
-
-session = Session()
-response = runner.run(agent, session, "介绍一下 Python")
-print(response)
-```
-
-**方式二：代码中直接配置**
-
-```python
-from tiny_adk import Agent, Runner, Session
-
-# 连接到 vLLM server
-runner = Runner(
-    api_base='http://localhost:8000/v1',
-    api_key='EMPTY',
-)
-
-agent = Agent(
-    name='智能助手',
-    model='Qwen/Qwen2.5-7B-Instruct',
-    instruction='你是一个有帮助的AI助手。',
-)
-
-session = Session()
-response = runner.run(agent, session, "介绍一下 Python")
-print(response)
-```
-
-**安装依赖**:
-```bash
-pip install openai pyyaml  # OpenAI 兼容客户端 + YAML 支持
-```
-
-### 示例 2: 带工具的 Agent
-
-```python
-from tiny_adk import Agent, Runner, Session, tool
-
-# 定义工具
-@tool(description='查询天气')
-def get_weather(city: str) -> str:
-    return f"{city}：晴天，25°C"
-
-# 创建带工具的 Agent
-agent = Agent(
-    name='天气助手',
-    instruction='你可以查询天气',
-    tools=[get_weather]
-)
-
-session = Session()
-runner = Runner()
-
-response = runner.run(agent, session, "北京天气怎么样？")
-```
-
-### 示例 3: 流式执行
-
-```python
-# 实时获取每个事件
-for event in runner.run_stream(agent, session, "你好"):
-    print(f"[{event.event_type.value}] {event.content}")
-```
-
-## ⚙️ 配置说明
-
-### 配置文件
-
-复制 `tiny_adk.example.yaml` 为 `tiny_adk.yaml` 并根据需要修改：
-
-```yaml
-# LLM API 配置
-llm:
-  api_base: "http://localhost:8000/v1"
-  api_key: "EMPTY"
-  model: "your-model-name"
-  temperature: 0.7
-  max_tokens: null
-  timeout: 60.0
-
-# Runner 运行时配置
-runner:
-  show_thinking: false  # 是否显示模型思考过程
-  show_request: false   # 是否显示 API 请求详情
-  max_iterations: 10    # 最大迭代次数
-```
-
-### 环境变量
-
-也可以通过环境变量配置（会覆盖配置文件）：
-
-```bash
-export TINY_ADK_API_BASE="http://localhost:8000/v1"
-export TINY_ADK_API_KEY="EMPTY"
-export TINY_ADK_MODEL="your-model-name"
-export TINY_ADK_SHOW_THINKING="true"
-```
 
 ## 🏗️ 架构设计
 
@@ -324,6 +178,8 @@ LLM 响应 → Event(MODEL_RESPONSE)
 4. **03b_streaming_with_thinking.py** - 流式执行（显示思考过程）
 5. **04_multi_turn.py** - 多轮对话
 6. **05_multiple_agents.py** - 多 Agent 协作
+7. **06_async_basic.py** - 异步执行（async/await）
+8. **07_async_streaming.py** - 异步流式执行
 
 ## 🔍 与完整版 ADK 的对比
 
