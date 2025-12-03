@@ -1,4 +1,4 @@
-"""示例 4: 异步执行 - 使用 async/await"""
+"""示例 4: 异步执行 - 使用 async/await（ADK 风格）"""
 
 import asyncio
 import sys
@@ -42,9 +42,13 @@ async def main():
         tools=[get_weather, search_database, send_notification],
     )
     
-    # 创建 SessionService 和 Runner
+    # 创建 Runner（绑定 Agent）
     session_service = SessionService()
-    runner = Runner(session_service=session_service)
+    runner = Runner(
+        app_name="async_app",
+        agent=agent,
+        session_service=session_service,
+    )
     
     user_id = 'user_001'
     
@@ -55,12 +59,15 @@ async def main():
     print('📝 用户: 你好，介绍一下你自己')
     
     # 创建 Session
-    await session_service.create_session(user_id=user_id, session_id='session_1')
+    await session_service.create_session(
+        app_name="async_app",
+        user_id=user_id,
+        session_id='session_1'
+    )
     
-    # 收集所有事件，获取最终响应
+    # 收集所有事件，获取最终响应（不需要传 agent）
     response = None
     async for event in runner.run_async(
-        agent=agent,
         user_id=user_id,
         session_id='session_1',
         message='你好，介绍一下你自己',
@@ -73,11 +80,14 @@ async def main():
     print('--- 示例 2: 调用同步工具 ---')
     print('📝 用户: 北京天气怎么样？')
     
-    await session_service.create_session(user_id=user_id, session_id='session_2')
+    await session_service.create_session(
+        app_name="async_app",
+        user_id=user_id,
+        session_id='session_2'
+    )
     
     response = None
     async for event in runner.run_async(
-        agent=agent,
         user_id=user_id,
         session_id='session_2',
         message='北京天气怎么样？',
@@ -90,11 +100,14 @@ async def main():
     print('--- 示例 3: 调用异步工具 ---')
     print('📝 用户: 帮我搜索一下 Python 教程')
     
-    await session_service.create_session(user_id=user_id, session_id='session_3')
+    await session_service.create_session(
+        app_name="async_app",
+        user_id=user_id,
+        session_id='session_3'
+    )
     
     response = None
     async for event in runner.run_async(
-        agent=agent,
         user_id=user_id,
         session_id='session_3',
         message='帮我搜索一下 Python 教程',
@@ -109,11 +122,14 @@ async def main():
     async def query_weather(city: str, sid: str) -> str:
         """并发查询天气"""
         # 创建 Session
-        await session_service.create_session(user_id=user_id, session_id=sid)
+        await session_service.create_session(
+            app_name="async_app",
+            user_id=user_id,
+            session_id=sid
+        )
         
         response = None
         async for event in runner.run_async(
-            agent=agent,
             user_id=user_id,
             session_id=sid,
             message=f'{city}天气',

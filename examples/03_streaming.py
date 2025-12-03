@@ -1,4 +1,4 @@
-"""示例 3: 流式执行 - 实时获取事件"""
+"""示例 3: 流式执行 - 实时获取事件（ADK 风格）"""
 
 import sys
 from pathlib import Path
@@ -23,24 +23,31 @@ def main():
         tools=[slow_task],
     )
     
-    # 创建 SessionService 和 Runner
+    # 创建 Runner（绑定 Agent）
     session_service = SessionService()
-    runner = Runner(session_service=session_service)
+    runner = Runner(
+        app_name="stream_app",
+        agent=agent,
+        session_service=session_service,
+    )
     
     user_id = 'user_001'
     session_id = 'stream_session'
     
-    # 显式创建 Session
-    session_service.create_session_sync(user_id=user_id, session_id=session_id)
+    # 创建 Session
+    session_service.create_session_sync(
+        app_name="stream_app",
+        user_id=user_id,
+        session_id=session_id
+    )
     
     print('=== 流式执行示例 ===')
     user_msg = '帮我执行一个数据分析任务'
     print(f'📝 用户: {user_msg}')
     print('🤖 Agent: ', end='', flush=True)
     
-    # 使用流式 API
+    # 使用流式 API（不需要传 agent）
     for event in runner.run_stream(
-        agent=agent,
         user_id=user_id,
         session_id=session_id,
         message=user_msg,

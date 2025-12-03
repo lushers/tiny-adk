@@ -1,4 +1,4 @@
-"""示例 2: 带工具的 Agent"""
+"""示例 2: 带工具的 Agent（ADK 风格）"""
 
 import sys
 from pathlib import Path
@@ -44,9 +44,13 @@ def main():
         tools=[web_search, get_weather, calculator],
     )
     
-    # 2. 创建 SessionService 和 Runner
+    # 2. 创建 Runner（绑定 Agent）
     session_service = SessionService()
-    runner = Runner(session_service=session_service)
+    runner = Runner(
+        app_name="tools_app",
+        agent=agent,
+        session_service=session_service,
+    )
     
     user_id = 'user_001'
     
@@ -60,14 +64,17 @@ def main():
     for i, message in enumerate(test_messages, 1):
         session_id = f'session_{i}'  # 每个问题使用独立 session
         
-        # 显式创建 Session
-        session_service.create_session_sync(user_id=user_id, session_id=session_id)
+        # 创建 Session
+        session_service.create_session_sync(
+            app_name="tools_app",
+            user_id=user_id,
+            session_id=session_id
+        )
         
         print(f'\n=== 对话 {i} ===')
         print(f'用户: {message}')
         
         response = runner.run(
-            agent=agent,
             user_id=user_id,
             session_id=session_id,
             message=message,
@@ -75,7 +82,11 @@ def main():
         print(f'Agent: {response}')
         
         # 显示使用了哪些工具
-        session = session_service.get_session_sync(user_id, session_id)
+        session = session_service.get_session_sync(
+            app_name="tools_app",
+            user_id=user_id,
+            session_id=session_id
+        )
         tool_calls = [
             e for e in session.get_events()
             if e.event_type.value == 'tool_call'

@@ -1,4 +1,4 @@
-"""会话管理 - 维护对话历史和状态"""
+"""会话管理 - 维护对话历史和状态（参考 ADK 设计）"""
 
 from __future__ import annotations
 
@@ -19,15 +19,24 @@ class Session:
     会话 - 维护一次完整对话的所有事件和状态
     
     核心设计理念:
+    - Session 属于特定的 app（通过 app_name 标识）
     - Session 是有状态的，存储所有历史事件
     - Runner 是无状态的，每次执行从 Session 加载历史
     - 这种分离使得会话可以持久化、恢复、跨进程共享
+    
+    Session 的唯一标识: (app_name, user_id, session_id)
     """
+    app_name: str = ""  # 应用名称
+    user_id: str = ""   # 用户 ID
     session_id: str = field(default_factory=lambda: str(uuid4()))
-    user_id: str = ""  # 用户 ID
     events: list[Event] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     state: dict[str, Any] = field(default_factory=dict)  # 会话状态
+    
+    @property
+    def id(self) -> str:
+        """Session ID 的别名（兼容 ADK）"""
+        return self.session_id
     
     def add_event(self, event: Event) -> None:
         """添加事件到会话"""
@@ -116,8 +125,9 @@ class Session:
     def to_dict(self) -> dict[str, Any]:
         """序列化为字典"""
         return {
-            'session_id': self.session_id,
+            'app_name': self.app_name,
             'user_id': self.user_id,
+            'session_id': self.session_id,
             'events': [e.to_dict() for e in self.events],
             'metadata': self.metadata,
             'state': self.state,
@@ -127,8 +137,9 @@ class Session:
     def from_dict(cls, data: dict[str, Any]) -> Session:
         """从字典反序列化"""
         return cls(
-            session_id=data['session_id'],
+            app_name=data.get('app_name', ''),
             user_id=data.get('user_id', ''),
+            session_id=data['session_id'],
             events=[Event.from_dict(e) for e in data['events']],
             metadata=data.get('metadata', {}),
             state=data.get('state', {}),
@@ -142,6 +153,7 @@ class SessionService:
     Session 持久化服务（参考 ADK 设计）
     
     设计原则:
+    - Session 通过 (app_name, user_id, session_id) 唯一标识
     - get_session: 只获取，不存在返回 None
     - create_session: 显式创建
     - append_event: 原子操作追加事件
@@ -149,16 +161,18 @@ class SessionService:
     这种分离使得:
     1. 行为可预测，没有隐式副作用
     2. 易于扩展到分布式存储（PostgreSQL、Redis 等）
-    3. 调用方明确控制 Session 生命周期
+    3. 不同 app 的 Session 相互隔离
     """
     
     def __init__(self):
-        self._sessions: dict[tuple[str, str], Session] = {}
+        # key: (app_name, user_id, session_id)
+        self._sessions: dict[tuple[str, str, str], Session] = {}
     
     # ==================== 获取（纯获取，不创建）====================
     
     async def get_session(
-        self, 
+        self,
+        app_name: str,
         user_id: str, 
         session_id: str
     ) -> Optional[Session]:
@@ -166,28 +180,31 @@ class SessionService:
         获取 Session
         
         Args:
+            app_name: 应用名称
             user_id: 用户 ID
             session_id: 会话 ID
             
         Returns:
             Session 实例，不存在返回 None
         """
-        key = (user_id, session_id)
+        key = (app_name, user_id, session_id)
         return self._sessions.get(key)
     
     def get_session_sync(
-        self, 
+        self,
+        app_name: str,
         user_id: str, 
         session_id: str
     ) -> Optional[Session]:
         """同步版本的获取 Session"""
-        key = (user_id, session_id)
+        key = (app_name, user_id, session_id)
         return self._sessions.get(key)
     
     # ==================== 创建（显式创建）====================
     
     async def create_session(
         self,
+        app_name: str,
         user_id: str,
         session_id: Optional[str] = None,
         state: Optional[dict[str, Any]] = None,
@@ -197,6 +214,7 @@ class SessionService:
         创建新 Session
         
         Args:
+            app_name: 应用名称
             user_id: 用户 ID
             session_id: 会话 ID（可选，不提供则自动生成）
             state: 初始状态
@@ -209,12 +227,13 @@ class SessionService:
             ValueError: 如果 Session 已存在
         """
         session_id = session_id or str(uuid4())
-        key = (user_id, session_id)
+        key = (app_name, user_id, session_id)
         
         if key in self._sessions:
             raise ValueError(f"Session already exists: {session_id}")
         
         session = Session(
+            app_name=app_name,
             user_id=user_id,
             session_id=session_id,
             state=state or {},
@@ -225,6 +244,7 @@ class SessionService:
     
     def create_session_sync(
         self,
+        app_name: str,
         user_id: str,
         session_id: Optional[str] = None,
         state: Optional[dict[str, Any]] = None,
@@ -232,12 +252,13 @@ class SessionService:
     ) -> Session:
         """同步版本的创建 Session"""
         session_id = session_id or str(uuid4())
-        key = (user_id, session_id)
+        key = (app_name, user_id, session_id)
         
         if key in self._sessions:
             raise ValueError(f"Session already exists: {session_id}")
         
         session = Session(
+            app_name=app_name,
             user_id=user_id,
             session_id=session_id,
             state=state or {},
@@ -279,7 +300,8 @@ class SessionService:
     # ==================== 删除 ====================
     
     async def delete_session(
-        self, 
+        self,
+        app_name: str,
         user_id: str, 
         session_id: str
     ) -> bool:
@@ -287,25 +309,27 @@ class SessionService:
         删除 Session
         
         Args:
+            app_name: 应用名称
             user_id: 用户 ID
             session_id: 会话 ID
             
         Returns:
             是否成功删除
         """
-        key = (user_id, session_id)
+        key = (app_name, user_id, session_id)
         if key in self._sessions:
             del self._sessions[key]
             return True
         return False
     
     def delete_session_sync(
-        self, 
+        self,
+        app_name: str,
         user_id: str, 
         session_id: str
     ) -> bool:
         """同步版本的删除 Session"""
-        key = (user_id, session_id)
+        key = (app_name, user_id, session_id)
         if key in self._sessions:
             del self._sessions[key]
             return True
@@ -313,11 +337,16 @@ class SessionService:
     
     # ==================== 列表查询 ====================
     
-    async def list_sessions(self, user_id: str) -> list[Session]:
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: str
+    ) -> list[Session]:
         """
-        列出用户的所有 Session
+        列出用户在特定 app 下的所有 Session
         
         Args:
+            app_name: 应用名称
             user_id: 用户 ID
             
         Returns:
@@ -325,16 +354,20 @@ class SessionService:
         """
         return [
             session 
-            for (uid, _), session in self._sessions.items() 
-            if uid == user_id
+            for (an, uid, _), session in self._sessions.items() 
+            if an == app_name and uid == user_id
         ]
     
-    def list_sessions_sync(self, user_id: str) -> list[Session]:
+    def list_sessions_sync(
+        self,
+        app_name: str,
+        user_id: str
+    ) -> list[Session]:
         """同步版本的列出 Session"""
         return [
             session 
-            for (uid, _), session in self._sessions.items() 
-            if uid == user_id
+            for (an, uid, _), session in self._sessions.items() 
+            if an == app_name and uid == user_id
         ]
 
 

@@ -3,7 +3,7 @@ tiny_adk - 简化版 Agent Development Kit
 
 核心组件:
 - Agent: 定义 AI agent 的蓝图（Pydantic BaseModel）
-- Runner: 无状态执行引擎
+- Runner: 无状态执行引擎（绑定 Agent）
 - Tool/BaseTool: 可调用的工具函数
 - Session: 会话状态管理
 - SessionService: Session 持久化服务
@@ -12,14 +12,12 @@ tiny_adk - 简化版 Agent Development Kit
 - Config: 配置管理
 
 架构:
-- Runner: 会话管理 + 编排
+- Runner: 执行编排（绑定 Agent）
 - Flow: Reason-Act 循环 + 工具执行
 - Model: LLM 抽象 + 请求/响应格式化
 
-特性:
-- Pydantic BaseModel 用于配置管理
-- model_post_init 用于初始化 Flow
-- FunctionCall 统一工具调用格式（在 models 层）
+Web 服务:
+- 请使用独立的 web 模块: from web import AgentService
 """
 
 from .agents import Agent
@@ -67,4 +65,4 @@ __all__ = [
     'ToolCall',
 ]
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
