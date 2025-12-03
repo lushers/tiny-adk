@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
 
 if TYPE_CHECKING:
     from ..agents import Agent
     from ..events import Event
-    from ..models import BaseLlm, LlmRequest, LlmResponse
-    from ..session import Session
-    from ..tools import Tool
+    from ..models import BaseLlm, LlmRequest
+    from ..session import Session, InvocationContext
+    from ..tools import BaseTool, Tool
+
+logger = logging.getLogger(__name__)
 
 
 class BaseFlow(ABC):
@@ -27,6 +30,7 @@ class BaseFlow(ABC):
     - Flow 是无状态的，所有状态在 Session 中
     - Flow 不管理会话，只执行单次完整的交互循环
     - Flow 可以被不同的 Runner 复用
+    - Flow 在 Agent 初始化时创建（通过 model_post_init）
     """
     
     def __init__(self, max_iterations: int = 10):
@@ -37,6 +41,7 @@ class BaseFlow(ABC):
             max_iterations: 最大循环次数，防止无限循环
         """
         self.max_iterations = max_iterations
+        logger.debug(f"[{self.__class__.__name__}] Created with max_iterations={max_iterations}")
     
     @abstractmethod
     def run(
@@ -133,7 +138,7 @@ class BaseFlow(ABC):
         from ..models import LlmRequest
         
         request = LlmRequest(
-            model=agent.model,
+            model=agent.get_model_name() if hasattr(agent, 'get_model_name') else agent.model,
             temperature=agent.temperature,
             max_tokens=agent.max_tokens,
         )
@@ -164,19 +169,22 @@ class BaseFlow(ABC):
         
         return request
     
-    def find_tool(self, agent: Agent, tool_name: str) -> Tool | None:
+    def find_tool(self, agent: Agent, tool_name: str) -> BaseTool | Tool | None:
         """查找工具"""
         for tool in agent.tools:
             if tool.name == tool_name:
                 return tool
         return None
     
-    def _tool_to_openai_format(self, tool: Tool) -> dict[str, Any]:
+    def _tool_to_openai_format(self, tool: BaseTool | Tool) -> dict[str, Any]:
         """将 Tool 转换为 OpenAI function calling 格式"""
         properties = {}
         required = []
         
-        for param_name, param_info in tool.parameters.items():
+        # 获取参数信息（Tool 类有 parameters 属性）
+        parameters = getattr(tool, 'parameters', None) or {}
+        
+        for param_name, param_info in parameters.items():
             param_type = param_info.get('type', 'string')
             
             type_mapping = {
@@ -209,4 +217,3 @@ class BaseFlow(ABC):
                 },
             },
         }
-

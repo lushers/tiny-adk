@@ -7,11 +7,29 @@ from typing import Any
 
 
 @dataclass
-class ToolCall:
-    """工具调用信息"""
+class FunctionCall:
+    """
+    工具/函数调用信息
+    
+    统一使用 FunctionCall 命名，与新架构保持一致
+    """
     id: str
     name: str
-    arguments: dict[str, Any]
+    args: dict[str, Any] = field(default_factory=dict)
+    
+    # 兼容旧的 arguments 字段
+    @property
+    def arguments(self) -> dict[str, Any]:
+        """兼容旧代码使用 arguments 字段"""
+        return self.args
+    
+    @arguments.setter
+    def arguments(self, value: dict[str, Any]) -> None:
+        self.args = value
+
+
+# 向后兼容：保留 ToolCall 作为别名
+ToolCall = FunctionCall
 
 
 @dataclass
@@ -23,7 +41,7 @@ class LlmResponse:
     
     Attributes:
         content: 文本内容
-        tool_calls: 工具调用列表
+        function_calls: 工具调用列表
         thinking: 思考过程（如果模型支持）
         raw_content: 原始未处理的内容
         finish_reason: 完成原因 (stop, tool_calls, length, etc.)
@@ -35,7 +53,7 @@ class LlmResponse:
     """
     
     content: str = ""
-    tool_calls: list[ToolCall] = field(default_factory=list)
+    function_calls: list[FunctionCall] = field(default_factory=list)
     thinking: str = ""
     raw_content: str = ""
     finish_reason: str | None = None
@@ -50,9 +68,23 @@ class LlmResponse:
     # 元数据
     metadata: dict[str, Any] = field(default_factory=dict)
     
-    def has_tool_calls(self) -> bool:
+    # 向后兼容：tool_calls 属性
+    @property
+    def tool_calls(self) -> list[FunctionCall]:
+        """兼容旧代码使用 tool_calls 字段"""
+        return self.function_calls
+    
+    @tool_calls.setter
+    def tool_calls(self, value: list[FunctionCall]) -> None:
+        self.function_calls = value
+    
+    def has_function_calls(self) -> bool:
         """是否包含工具调用"""
-        return len(self.tool_calls) > 0
+        return len(self.function_calls) > 0
+    
+    def has_tool_calls(self) -> bool:
+        """是否包含工具调用（兼容旧命名）"""
+        return self.has_function_calls()
     
     def is_error(self) -> bool:
         """是否是错误响应"""
@@ -75,4 +107,3 @@ class LlmResponse:
             delta=delta,
             metadata={"chunk_index": chunk_index},
         )
-

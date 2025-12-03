@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from typing import TYPE_CHECKING, AsyncIterator, Iterator
 
 from .base_flow import BaseFlow
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
     from ..session import Session
 
 from ..events import Event, EventType
+
+logger = logging.getLogger(__name__)
 
 
 class SimpleFlow(BaseFlow):
@@ -59,6 +62,8 @@ class SimpleFlow(BaseFlow):
             ))
             return error_msg
         
+        logger.debug(f"[SimpleFlow] Iteration {iteration + 1}")
+        
         # 构建请求并调用 LLM
         request = self.build_request(agent, session)
         response = llm.generate(request)
@@ -75,9 +80,9 @@ class SimpleFlow(BaseFlow):
         ))
         
         # 如果有工具调用，执行工具并继续循环
-        if response.has_tool_calls():
-            for tool_call in response.tool_calls:
-                self._execute_tool(agent, session, tool_call)
+        if response.has_function_calls():
+            for fc in response.function_calls:
+                self._execute_tool(agent, session, fc)
             return self._reason_act_loop(agent, session, llm, iteration + 1)
         
         return response.content
@@ -112,6 +117,8 @@ class SimpleFlow(BaseFlow):
             yield event
             return
         
+        logger.debug(f"[SimpleFlow] Stream iteration {iteration + 1}")
+        
         # 构建请求
         request = self.build_request(agent, session)
         
@@ -141,9 +148,9 @@ class SimpleFlow(BaseFlow):
                 yield event
         
         # 处理工具调用
-        if final_response and final_response.has_tool_calls():
-            for tool_call in final_response.tool_calls:
-                yield from self._execute_tool_stream(agent, session, tool_call)
+        if final_response and final_response.has_function_calls():
+            for fc in final_response.function_calls:
+                yield from self._execute_tool_stream(agent, session, fc)
             yield from self._reason_act_loop_stream(agent, session, llm, iteration + 1)
     
     # ==================== 异步非流式 ====================
@@ -174,6 +181,8 @@ class SimpleFlow(BaseFlow):
             ))
             return error_msg
         
+        logger.debug(f"[SimpleFlow] Async iteration {iteration + 1}")
+        
         # 构建请求并调用 LLM
         request = self.build_request(agent, session)
         response = await llm.generate_async(request)
@@ -190,9 +199,9 @@ class SimpleFlow(BaseFlow):
         ))
         
         # 如果有工具调用，执行工具并继续循环
-        if response.has_tool_calls():
-            for tool_call in response.tool_calls:
-                await self._execute_tool_async(agent, session, tool_call)
+        if response.has_function_calls():
+            for fc in response.function_calls:
+                await self._execute_tool_async(agent, session, fc)
             return await self._reason_act_loop_async(agent, session, llm, iteration + 1)
         
         return response.content
@@ -228,6 +237,8 @@ class SimpleFlow(BaseFlow):
             yield event
             return
         
+        logger.debug(f"[SimpleFlow] Async stream iteration {iteration + 1}")
+        
         # 构建请求
         request = self.build_request(agent, session)
         
@@ -255,148 +266,187 @@ class SimpleFlow(BaseFlow):
                 yield event
         
         # 处理工具调用
-        if final_response and final_response.has_tool_calls():
-            for tool_call in final_response.tool_calls:
-                async for event in self._execute_tool_stream_async(agent, session, tool_call):
+        if final_response and final_response.has_function_calls():
+            for fc in final_response.function_calls:
+                async for event in self._execute_tool_stream_async(agent, session, fc):
                     yield event
             async for event in self._reason_act_loop_stream_async(agent, session, llm, iteration + 1):
                 yield event
     
     # ==================== 工具执行 ====================
     
-    def _execute_tool(self, agent, session, tool_call) -> None:
+    def _execute_tool(self, agent, session, function_call) -> None:
         """执行工具调用"""
+        # 获取工具调用信息（FunctionCall 对象）
+        call_id = function_call.id
+        call_name = function_call.name
+        call_args = function_call.args if hasattr(function_call, 'args') else function_call.arguments
+        
         session.add_event(Event(
             event_type=EventType.TOOL_CALL,
             content={
-                'id': tool_call.id,
-                'name': tool_call.name,
-                'arguments': tool_call.arguments,
+                'id': call_id,
+                'name': call_name,
+                'arguments': call_args,
             },
         ))
         
-        tool = self.find_tool(agent, tool_call.name)
+        tool = self.find_tool(agent, call_name)
         if tool:
             try:
-                result = tool.execute(**tool_call.arguments)
+                # 使用新接口：run(args, context)
+                if hasattr(tool, 'run'):
+                    result = tool.run(call_args, None)
+                else:
+                    # 兼容旧接口
+                    result = tool.execute(**call_args)
+                
                 session.add_event(Event(
                     event_type=EventType.TOOL_RESPONSE,
                     content={
-                        'call_id': tool_call.id,
-                        'name': tool_call.name,
+                        'call_id': call_id,
+                        'name': call_name,
                         'result': str(result),
                     },
                 ))
             except Exception as e:
+                logger.error(f"Tool {call_name} execution failed: {e}")
                 session.add_event(Event(
                     event_type=EventType.ERROR,
-                    content={'tool': tool_call.name, 'error': str(e)},
+                    content={'tool': call_name, 'error': str(e)},
                 ))
     
-    def _execute_tool_stream(self, agent, session, tool_call) -> Iterator[Event]:
+    def _execute_tool_stream(self, agent, session, function_call) -> Iterator[Event]:
         """流式执行工具"""
+        call_id = function_call.id
+        call_name = function_call.name
+        call_args = function_call.args if hasattr(function_call, 'args') else function_call.arguments
+        
         event = Event(
             event_type=EventType.TOOL_CALL,
             content={
-                'id': tool_call.id,
-                'name': tool_call.name,
-                'arguments': tool_call.arguments,
+                'id': call_id,
+                'name': call_name,
+                'arguments': call_args,
             },
         )
         session.add_event(event)
         yield event
         
-        tool = self.find_tool(agent, tool_call.name)
+        tool = self.find_tool(agent, call_name)
         if tool:
             try:
-                result = tool.execute(**tool_call.arguments)
+                if hasattr(tool, 'run'):
+                    result = tool.run(call_args, None)
+                else:
+                    result = tool.execute(**call_args)
+                
                 event = Event(
                     event_type=EventType.TOOL_RESPONSE,
                     content={
-                        'call_id': tool_call.id,
-                        'name': tool_call.name,
+                        'call_id': call_id,
+                        'name': call_name,
                         'result': str(result),
                     },
                 )
                 session.add_event(event)
                 yield event
             except Exception as e:
+                logger.error(f"Tool {call_name} execution failed: {e}")
                 event = Event(
                     event_type=EventType.ERROR,
-                    content={'tool': tool_call.name, 'error': str(e)},
+                    content={'tool': call_name, 'error': str(e)},
                 )
                 session.add_event(event)
                 yield event
     
-    async def _execute_tool_async(self, agent, session, tool_call) -> None:
+    async def _execute_tool_async(self, agent, session, function_call) -> None:
         """异步执行工具"""
+        call_id = function_call.id
+        call_name = function_call.name
+        call_args = function_call.args if hasattr(function_call, 'args') else function_call.arguments
+        
         session.add_event(Event(
             event_type=EventType.TOOL_CALL,
             content={
-                'id': tool_call.id,
-                'name': tool_call.name,
-                'arguments': tool_call.arguments,
+                'id': call_id,
+                'name': call_name,
+                'arguments': call_args,
             },
         ))
         
-        tool = self.find_tool(agent, tool_call.name)
+        tool = self.find_tool(agent, call_name)
         if tool:
             try:
-                if inspect.iscoroutinefunction(tool.func):
-                    result = await tool.func(**tool_call.arguments)
+                # 使用新接口：run_async(args, context)
+                if hasattr(tool, 'run_async'):
+                    result = await tool.run_async(call_args, None)
+                elif hasattr(tool, 'func') and inspect.iscoroutinefunction(tool.func):
+                    result = await tool.func(**call_args)
+                elif hasattr(tool, 'execute'):
+                    result = await asyncio.to_thread(tool.execute, **call_args)
                 else:
-                    result = await asyncio.to_thread(tool.execute, **tool_call.arguments)
+                    result = await asyncio.to_thread(tool.run, call_args, None)
                 
                 session.add_event(Event(
                     event_type=EventType.TOOL_RESPONSE,
                     content={
-                        'call_id': tool_call.id,
-                        'name': tool_call.name,
+                        'call_id': call_id,
+                        'name': call_name,
                         'result': str(result),
                     },
                 ))
             except Exception as e:
+                logger.error(f"Tool {call_name} execution failed: {e}")
                 session.add_event(Event(
                     event_type=EventType.ERROR,
-                    content={'tool': tool_call.name, 'error': str(e)},
+                    content={'tool': call_name, 'error': str(e)},
                 ))
     
-    async def _execute_tool_stream_async(self, agent, session, tool_call) -> AsyncIterator[Event]:
+    async def _execute_tool_stream_async(self, agent, session, function_call) -> AsyncIterator[Event]:
         """异步流式执行工具"""
+        call_id = function_call.id
+        call_name = function_call.name
+        call_args = function_call.args if hasattr(function_call, 'args') else function_call.arguments
+        
         event = Event(
             event_type=EventType.TOOL_CALL,
             content={
-                'id': tool_call.id,
-                'name': tool_call.name,
-                'arguments': tool_call.arguments,
+                'id': call_id,
+                'name': call_name,
+                'arguments': call_args,
             },
         )
         session.add_event(event)
         yield event
         
-        tool = self.find_tool(agent, tool_call.name)
+        tool = self.find_tool(agent, call_name)
         if tool:
             try:
-                if inspect.iscoroutinefunction(tool.func):
-                    result = await tool.func(**tool_call.arguments)
+                if hasattr(tool, 'run_async'):
+                    result = await tool.run_async(call_args, None)
+                elif hasattr(tool, 'func') and inspect.iscoroutinefunction(tool.func):
+                    result = await tool.func(**call_args)
+                elif hasattr(tool, 'execute'):
+                    result = await asyncio.to_thread(tool.execute, **call_args)
                 else:
-                    result = await asyncio.to_thread(tool.execute, **tool_call.arguments)
+                    result = await asyncio.to_thread(tool.run, call_args, None)
                 
                 event = Event(
                     event_type=EventType.TOOL_RESPONSE,
                     content={
-                        'call_id': tool_call.id,
-                        'name': tool_call.name,
+                        'call_id': call_id,
+                        'name': call_name,
                         'result': str(result),
                     },
                 )
                 session.add_event(event)
                 yield event
             except Exception as e:
+                logger.error(f"Tool {call_name} execution failed: {e}")
                 event = Event(
                     event_type=EventType.ERROR,
-                    content={'tool': tool_call.name, 'error': str(e)},
+                    content={'tool': call_name, 'error': str(e)},
                 )
                 session.add_event(event)
                 yield event
-

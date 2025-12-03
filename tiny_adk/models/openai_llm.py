@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Iterator
 
 from .base_llm import BaseLlm
 from .llm_request import LlmRequest
-from .llm_response import LlmResponse, ToolCall
+from .llm_response import LlmResponse, FunctionCall
 
 
 class ThinkingFilter:
@@ -77,7 +77,7 @@ class ThinkingFilter:
 
 class OpenAILlm(BaseLlm):
     """
-    OpenAI 兼容的 LLM 实现
+    OpenAI 兼容的 LLM 实现（使用 Pydantic）
     
     支持:
     - OpenAI API
@@ -92,21 +92,18 @@ class OpenAILlm(BaseLlm):
         show_request: 是否显示 API 请求详情
     """
     
-    def __init__(
-        self,
-        api_base: str | None = None,
-        api_key: str | None = None,
-        model: str = "",
-        show_thinking: bool = False,
-        show_request: bool = False,
-        client: Any = None,
-    ):
-        super().__init__(model)
-        self.api_base = api_base
-        self.api_key = api_key
-        self.show_thinking = show_thinking
-        self.show_request = show_request
-        self._client = client
+    api_base: str | None = None
+    api_key: str | None = None
+    show_thinking: bool = False
+    show_request: bool = False
+    
+    # 私有字段（不在 Pydantic 模式中）
+    _client: Any = None
+    
+    def model_post_init(self, __context: Any) -> None:
+        """Pydantic 初始化完成后的钩子"""
+        super().model_post_init(__context)
+        self._client = None
     
     @property
     def client(self) -> Any:
@@ -199,22 +196,22 @@ class OpenAILlm(BaseLlm):
         raw_content = message.content or ""
         clean_content, thinking = self._extract_thinking(raw_content)
         
-        tool_calls = []
+        function_calls = []
         if message.tool_calls:
             for tc in message.tool_calls:
                 try:
                     args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     args = {}
-                tool_calls.append(ToolCall(
+                function_calls.append(FunctionCall(
                     id=tc.id,
                     name=tc.function.name,
-                    arguments=args,
+                    args=args,
                 ))
         
         return LlmResponse(
             content=clean_content,
-            tool_calls=tool_calls,
+            function_calls=function_calls,
             thinking=thinking,
             raw_content=raw_content,
             finish_reason=choice.finish_reason,
@@ -290,23 +287,23 @@ class OpenAILlm(BaseLlm):
             yield LlmResponse.create_delta(remaining, chunk_index)
         
         # 解析工具调用
-        tool_calls = []
+        function_calls = []
         for tc in tool_calls_data:
             if tc.get("name"):
                 try:
                     args = json.loads(tc.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                tool_calls.append(ToolCall(
+                function_calls.append(FunctionCall(
                     id=tc.get("id", "call_unknown"),
                     name=tc["name"],
-                    arguments=args,
+                    args=args,
                 ))
         
         # 返回最终完整响应
         yield LlmResponse(
             content=clean_content,
-            tool_calls=tool_calls,
+            function_calls=function_calls,
             thinking=thinking,
             raw_content=full_content,
             finish_reason=finish_reason,
@@ -378,4 +375,3 @@ class OpenAILlm(BaseLlm):
                 print(f"  [{i+1}] {role}: {content}")
         
         print("=" * 60 + "\n")
-

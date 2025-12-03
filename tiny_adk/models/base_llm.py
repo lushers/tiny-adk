@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Iterator
+from typing import Any, AsyncIterator, Iterator
+
+from pydantic import BaseModel
 
 from .llm_request import LlmRequest
 from .llm_response import LlmResponse
 
 
-class BaseLlm(ABC):
+class BaseLlm(BaseModel, ABC):
     """
-    LLM 抽象基类
+    LLM 抽象基类（使用 Pydantic）
     
     所有 LLM 实现都需要继承这个类，并实现以下方法：
     - generate: 同步生成（非流式）
@@ -23,16 +25,13 @@ class BaseLlm(ABC):
     - 统一接口：不同 LLM 提供商有相同的调用方式
     - 请求/响应标准化：使用 LlmRequest 和 LlmResponse
     - 支持同步/异步、流式/非流式四种模式
+    - 使用 Pydantic 进行配置管理和验证
     """
     
-    def __init__(self, model: str = ""):
-        """
-        初始化 LLM
-        
-        Args:
-            model: 模型名称（如果不在请求中指定，则使用这个默认值）
-        """
-        self.model = model
+    model_config = {"arbitrary_types_allowed": True}
+    
+    # 模型名称
+    model: str = ""
     
     @abstractmethod
     def generate(self, request: LlmRequest) -> LlmResponse:
@@ -45,7 +44,7 @@ class BaseLlm(ABC):
         Returns:
             完整的 LLM 响应
         """
-        pass
+        raise NotImplementedError
     
     @abstractmethod
     def generate_stream(self, request: LlmRequest) -> Iterator[LlmResponse]:
@@ -58,7 +57,7 @@ class BaseLlm(ABC):
         Yields:
             流式响应片段，最后一个响应的 partial=False 表示完成
         """
-        pass
+        raise NotImplementedError
     
     @abstractmethod
     async def generate_async(self, request: LlmRequest) -> LlmResponse:
@@ -71,7 +70,7 @@ class BaseLlm(ABC):
         Returns:
             完整的 LLM 响应
         """
-        pass
+        raise NotImplementedError
     
     @abstractmethod
     async def generate_stream_async(
@@ -86,7 +85,7 @@ class BaseLlm(ABC):
         Yields:
             流式响应片段，最后一个响应的 partial=False 表示完成
         """
-        pass
+        raise NotImplementedError
     
     def get_model(self, request: LlmRequest) -> str:
         """获取实际使用的模型名称"""
@@ -100,4 +99,3 @@ class BaseLlm(ABC):
         子类可以覆盖这个方法来声明支持的模型
         """
         return []
-

@@ -4,21 +4,19 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tiny_adk import Agent, Runner, Session, tool
+from tiny_adk import Agent, Runner, tool
 
 
 # 定义工具函数
 @tool(description='搜索互联网获取实时信息')
 def web_search(query: str) -> str:
     """模拟网页搜索"""
-    # 实际应该调用真实的搜索 API
     return f'搜索 "{query}" 的结果：这是模拟的搜索结果。'
 
 
 @tool(description='获取指定城市的天气信息')
 def get_weather(city: str) -> str:
     """模拟天气查询"""
-    # 实际应该调用天气 API
     weather_data = {
         '北京': '晴天，25°C',
         '上海': '多云，22°C',
@@ -31,7 +29,6 @@ def get_weather(city: str) -> str:
 def calculator(expression: str) -> str:
     """安全的计算器"""
     try:
-        # 注意：eval 有安全风险，这里仅用于演示
         result = eval(expression, {'__builtins__': {}}, {})
         return f'{expression} = {result}'
     except Exception as e:
@@ -42,13 +39,13 @@ def main():
     # 创建带工具的 Agent
     agent = Agent(
         name='智能助手',
-        model='QuantTrio/MiniMax-M2-AWQ',  # 使用真实模型
+        model='QuantTrio/MiniMax-M2-AWQ',
         instruction='你是一个智能助手，可以搜索信息、查天气、做计算。请根据用户需求选择合适的工具。',
-        tools=[web_search, get_weather, calculator],  # 赋予 Agent 能力
+        tools=[web_search, get_weather, calculator],
     )
     
-    session = Session()
-    runner = Runner()  # 会自动连接到配置的 API
+    runner = Runner()
+    user_id = 'user_001'
     
     # 测试不同的工具调用
     test_messages = [
@@ -58,13 +55,21 @@ def main():
     ]
     
     for i, message in enumerate(test_messages, 1):
+        session_id = f'session_{i}'  # 每个问题使用独立 session
+        
         print(f'\n=== 对话 {i} ===')
         print(f'用户: {message}')
         
-        response = runner.run(agent, session, message)
+        response = runner.run(
+            agent=agent,
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+        )
         print(f'Agent: {response}')
         
         # 显示使用了哪些工具
+        session = runner.get_session(user_id, session_id)
         tool_calls = [
             e for e in session.get_events()
             if e.event_type.value == 'tool_call'

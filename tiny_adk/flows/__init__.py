@@ -10,6 +10,7 @@ Flow 层 - 流程控制层
 - Flow 负责工具调用的执行
 - Flow 不关心具体使用哪个 LLM（由 Model 层提供）
 - Flow 不关心会话管理（由 Runner 层管理）
+- Flow 在 Agent 初始化时创建（通过 model_post_init）
 """
 
 from .base_flow import BaseFlow
@@ -19,4 +20,3 @@ __all__ = [
     'BaseFlow',
     'SimpleFlow',
 ]
-
