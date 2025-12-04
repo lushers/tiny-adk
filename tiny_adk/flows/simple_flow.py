@@ -24,36 +24,26 @@ class SimpleFlow(BaseFlow):
     简单的 Reason-Act 循环实现
     
     设计理念（借鉴 Google ADK）：
-    - 统一生成器接口：run_stream / run_stream_async 是核心
-    - 非流式方法只是包装器
+    - 统一接口：run(stream) / run_async(stream)，通过 stream 参数控制流式/非流式
     - LLM 返回生成器，Flow 负责 LlmResponse -> Event 转换
     - 所有事件只 yield，由 Runner 负责持久化
+    
+    关于 stream 参数：
+    - stream=False: LLM 使用非流式 API，只 yield 一个 MODEL_RESPONSE
+    - stream=True: LLM 使用流式 API，yield 多个 MODEL_RESPONSE_DELTA + 最后一个 MODEL_RESPONSE
     """
     
-    # ==================== 同步接口 ====================
+    # ==================== 同步执行 ====================
     
     def run(
         self,
         agent: 'Agent',
         session: 'Session',
         llm: 'BaseLlm',
-    ) -> str:
-        """同步执行（收集事件并返回最终内容）"""
-        final_content = ""
-        for event in self.run_stream(agent, session, llm):
-            if event.event_type == EventType.MODEL_RESPONSE:
-                final_content = event.content or ""
-        return final_content
-    
-    def run_stream(
-        self,
-        agent: 'Agent',
-        session: 'Session',
-        llm: 'BaseLlm',
-        stream: bool = True,
+        stream: bool = False,
     ) -> Iterator[Event]:
         """
-        同步流式执行（核心方法）
+        同步执行
         
         Args:
             stream: 是否流式生成（传递给 LLM）
@@ -111,30 +101,17 @@ class SimpleFlow(BaseFlow):
                 yield from self._execute_tool(agent, session, fc)
             yield from self._reason_act_loop(agent, session, llm, stream, iteration + 1)
     
-    # ==================== 异步接口 ====================
+    # ==================== 异步执行 ====================
     
     async def run_async(
         self,
         agent: 'Agent',
         session: 'Session',
         llm: 'BaseLlm',
-    ) -> str:
-        """异步执行（收集事件并返回最终内容）"""
-        final_content = ""
-        async for event in self.run_stream_async(agent, session, llm):
-            if event.event_type == EventType.MODEL_RESPONSE:
-                final_content = event.content or ""
-        return final_content
-    
-    async def run_stream_async(
-        self,
-        agent: 'Agent',
-        session: 'Session',
-        llm: 'BaseLlm',
-        stream: bool = True,
+        stream: bool = False,
     ) -> AsyncIterator[Event]:
         """
-        异步流式执行（核心方法）
+        异步执行
         
         Args:
             stream: 是否流式生成（传递给 LLM）

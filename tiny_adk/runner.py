@@ -270,10 +270,10 @@ class Runner:
             # 获取 LLM
             llm = agent.llm or self._create_llm()
             
-            # 执行：收集所有事件并添加到 session
+            # 执行：收集所有事件并添加到 session（非流式）
             final_content = ""
             event_count = 0
-            for event in agent.flow.run_stream(agent, ctx.session, llm):
+            for event in agent.flow.run(agent, ctx.session, llm, stream=False):
                 event_count += 1
                 # 非 partial 事件追加到 Session
                 if not getattr(event, 'partial', False):
@@ -355,9 +355,9 @@ class Runner:
             # 获取 LLM
             llm = agent.llm or self._create_llm()
             
-            # 执行
+            # 执行（流式）
             event_count = 0
-            for event in agent.flow.run_stream(agent, ctx.session, llm):
+            for event in agent.flow.run(agent, ctx.session, llm, stream=True):
                 event_count += 1
                 # 非 partial 事件追加到 Session
                 if not getattr(event, 'partial', False):

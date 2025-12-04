@@ -180,7 +180,7 @@ class LlmAgent(BaseAgent):
             return
         
         # 委托给 Flow 执行
-        async for event in self.flow.run_stream_async(self, session, llm):
+        async for event in self.flow.run_async(self, session, llm, stream=True):
             yield event
             
             # 检查跳转
@@ -204,7 +204,7 @@ class LlmAgent(BaseAgent):
         if llm is None:
             raise ValueError(f"Agent '{self.name}' has no LLM configured")
         
-        for event in self.flow.run_stream(self, session, llm):
+        for event in self.flow.run(self, session, llm, stream=True):
             yield event
     
     def _check_pending_transfer(self, session: 'Session') -> Optional['BaseAgent']:
