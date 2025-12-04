@@ -192,12 +192,11 @@ async def example_sequential():
     )
     
     # 创建顺序执行 Agent
+    # 注意：SequentialAgent 是编排器，不需要 instruction 和 model
     pipeline = SequentialAgent(
         name="writing_pipeline",
         description="写作流水线",
-        instruction="",
         sub_agents=[planner, writer, reviewer],
-        model="QuantTrio/MiniMax-M2-AWQ",
     )
     
     # 创建 Runner

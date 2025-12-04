@@ -77,19 +77,12 @@ class ThinkingFilter:
 
 class OpenAILlm(BaseLlm):
     """
-    OpenAI 兼容的 LLM 实现（使用 Pydantic）
+    OpenAI 兼容的 LLM 实现
     
-    支持:
-    - OpenAI API
-    - vLLM (OpenAI 兼容模式)
-    - 其他 OpenAI 兼容的 API
-    
-    Attributes:
-        api_base: API 地址
-        api_key: API 密钥
-        model: 默认模型名称
-        show_thinking: 是否显示思考过程
-        show_request: 是否显示 API 请求详情
+    统一接口设计（借鉴 Google ADK）：
+    - generate() 和 generate_async() 都返回生成器
+    - 通过 stream 参数区分流式/非流式
+    - 非流式只 yield 一次，流式 yield 多次
     """
     
     api_base: str | None = None
@@ -98,7 +91,6 @@ class OpenAILlm(BaseLlm):
     show_request: bool = False
     log_level: str = "normal"  # minimal | normal | verbose
     
-    # 私有字段（不在 Pydantic 模式中）
     _client: Any = None
     
     def model_post_init(self, __context: Any) -> None:
@@ -119,82 +111,86 @@ class OpenAILlm(BaseLlm):
     
     @classmethod
     def supported_models(cls) -> list[str]:
-        return [
-            r"gpt-.*",
-            r"o1-.*",
-            r"chatgpt-.*",
-        ]
+        return [r"gpt-.*", r"o1-.*", r"chatgpt-.*"]
     
-    def generate(self, request: LlmRequest) -> LlmResponse:
-        """同步非流式生成"""
+    # ==================== 统一生成接口 ====================
+    
+    def generate(
+        self, 
+        request: LlmRequest, 
+        stream: bool = False,
+    ) -> Iterator[LlmResponse]:
+        """
+        同步生成（统一接口）
+        
+        - stream=False: 只 yield 一次完整响应
+        - stream=True: yield 多个增量 + 最后完整响应
+        """
         try:
             params = request.to_openai_format()
             params["model"] = self.get_model(request)
-            params["stream"] = False
+            params["stream"] = stream
             
             self._log_request(params)
-            response = self.client.chat.completions.create(**params)
-            result = self._parse_response(response)
-            self._log_response(result)
-            return result
-        except Exception as e:
-            return LlmResponse.from_error(str(e))
-    
-    def generate_stream(self, request: LlmRequest) -> Iterator[LlmResponse]:
-        """同步流式生成"""
-        try:
-            params = request.to_openai_format()
-            params["model"] = self.get_model(request)
-            params["stream"] = True
             
-            self._log_request(params)
-            stream = self.client.chat.completions.create(**params)
-            yield from self._process_stream(stream)
+            if stream:
+                # 流式生成
+                stream_response = self.client.chat.completions.create(**params)
+                yield from self._process_stream(stream_response)
+            else:
+                # 非流式生成
+                response = self.client.chat.completions.create(**params)
+                result = self._parse_response(response)
+                self._log_response(result)
+                yield result
+                
         except Exception as e:
             yield LlmResponse.from_error(str(e))
     
-    async def generate_async(self, request: LlmRequest) -> LlmResponse:
-        """异步非流式生成"""
-        try:
-            params = request.to_openai_format()
-            params["model"] = self.get_model(request)
-            params["stream"] = False
-            
-            self._log_request(params)
-            # 使用线程池执行同步调用
-            response = await asyncio.to_thread(
-                self.client.chat.completions.create,
-                **params
-            )
-            result = self._parse_response(response)
-            self._log_response(result)
-            return result
-        except Exception as e:
-            return LlmResponse.from_error(str(e))
-    
-    async def generate_stream_async(
-        self, request: LlmRequest
+    async def generate_async(
+        self, 
+        request: LlmRequest, 
+        stream: bool = False,
     ) -> AsyncIterator[LlmResponse]:
-        """异步流式生成"""
+        """
+        异步生成（统一接口）
+        
+        - stream=False: 只 yield 一次完整响应
+        - stream=True: yield 多个增量 + 最后完整响应
+        """
         try:
             params = request.to_openai_format()
             params["model"] = self.get_model(request)
-            params["stream"] = True
+            params["stream"] = stream
             
             self._log_request(params)
-            stream = await asyncio.to_thread(
-                self.client.chat.completions.create,
-                **params
-            )
             
-            for response in self._process_stream(stream):
-                yield response
-                await asyncio.sleep(0)  # 让出控制权
+            if stream:
+                # 流式生成
+                stream_response = await asyncio.to_thread(
+                    self.client.chat.completions.create,
+                    **params
+                )
+                for response in self._process_stream(stream_response):
+                    yield response
+                    await asyncio.sleep(0)  # 让出控制权
+            else:
+                # 非流式生成
+                response = await asyncio.to_thread(
+                    self.client.chat.completions.create,
+                    **params
+                )
+                result = self._parse_response(response)
+                self._log_response(result)
+                yield result
+                
         except Exception as e:
             yield LlmResponse.from_error(str(e))
+    
+    # ==================== 响应解析 ====================
     
     def _parse_response(self, response: Any) -> LlmResponse:
-        """解析 OpenAI 响应"""
+        """解析 OpenAI 非流式响应"""
         choice = response.choices[0]
         message = choice.message
         
@@ -220,7 +216,6 @@ class OpenAILlm(BaseLlm):
         if not function_calls and self._has_xml_tool_calls(raw_content):
             xml_calls = self._parse_minimax_tool_calls(raw_content)
             function_calls.extend(xml_calls)
-            # 从 content 中移除工具调用 XML
             clean_content = self._remove_minimax_tool_calls(clean_content)
         
         return LlmResponse(
@@ -230,6 +225,7 @@ class OpenAILlm(BaseLlm):
             raw_content=raw_content,
             finish_reason=choice.finish_reason,
             model=response.model,
+            partial=False,
             usage={
                 "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
                 "completion_tokens": response.usage.completion_tokens if response.usage else 0,
@@ -317,7 +313,6 @@ class OpenAILlm(BaseLlm):
         # 如果没有标准工具调用，检查 MiniMax XML 格式
         if not function_calls and self._has_xml_tool_calls(full_content):
             function_calls = self._parse_minimax_tool_calls(full_content)
-            # 从 content 中移除工具调用 XML
             clean_content = self._remove_minimax_tool_calls(clean_content)
         
         # 返回最终完整响应
@@ -333,6 +328,8 @@ class OpenAILlm(BaseLlm):
         self._log_response(final_response)
         yield final_response
     
+    # ==================== 辅助方法 ====================
+    
     def _extract_thinking(self, raw_content: str) -> tuple[str, str]:
         """提取并分离思考内容"""
         if not raw_content:
@@ -346,14 +343,7 @@ class OpenAILlm(BaseLlm):
         return clean_content, thinking_content
     
     def _parse_minimax_tool_calls(self, content: str) -> list[FunctionCall]:
-        """
-        解析 MiniMax 模型的 XML 格式工具调用
-        
-        支持多种格式:
-        1. <minimax:tool_call><invoke name="...">...</invoke></minimax:tool_call>
-        2. <invoke name="..."><parameter name="...">...</parameter></invoke>
-        3. <invoke><tool_name><param>value</param></tool_name></invoke>
-        """
+        """解析 MiniMax 模型的 XML 格式工具调用"""
         function_calls = []
         call_index = 0
         
@@ -365,11 +355,8 @@ class OpenAILlm(BaseLlm):
                 function_calls.append(fc)
                 call_index += 1
         
-        # 格式 2 & 3: 独立的 <invoke>...</invoke>（不在 minimax:tool_call 内）
-        # 先移除已处理的 minimax:tool_call 块
+        # 格式 2 & 3: 独立的 <invoke>...</invoke>
         remaining = re.sub(tool_call_pattern, '', content, flags=re.DOTALL)
-        
-        # 匹配所有 <invoke>...</invoke>
         invoke_pattern = r'<invoke[^>]*>(.*?)</invoke>'
         for block in re.findall(invoke_pattern, remaining, re.DOTALL):
             fc = self._parse_invoke_block(block, call_index)
@@ -391,13 +378,11 @@ class OpenAILlm(BaseLlm):
             return FunctionCall(id=f"call_minimax_{index}", name=func_name, args=args)
         
         # 格式 B: <invoke><tool_name><param1>value1</param1></tool_name></invoke>
-        # 或: <invoke><transfer_to_agent><agent>name</agent><args>...</args></transfer_to_agent></invoke>
         tool_match = re.search(r'<(\w+)>(.*?)</\1>', block, re.DOTALL)
         if tool_match:
             func_name = tool_match.group(1)
             inner_content = tool_match.group(2)
             
-            # 解析内部参数
             args = {}
             param_matches = re.findall(r'<(\w+)>(.*?)</\1>', inner_content, re.DOTALL)
             for param_name, param_value in param_matches:
@@ -408,9 +393,7 @@ class OpenAILlm(BaseLlm):
                 if 'agent' in args:
                     args['agent_name'] = args.pop('agent')
                 if 'args' in args:
-                    # 解析 args 中可能嵌套的参数
                     args_content = args.pop('args')
-                    # 提取 <task>...</task> 或其他嵌套参数
                     nested = re.findall(r'<(\w+)>(.*?)</\1>', args_content, re.DOTALL)
                     if nested:
                         for param_name, param_value in nested:
@@ -428,41 +411,37 @@ class OpenAILlm(BaseLlm):
     
     def _remove_minimax_tool_calls(self, content: str) -> str:
         """从 content 中移除 MiniMax XML 格式的工具调用"""
-        # 移除 <minimax:tool_call>...</minimax:tool_call> 块
         clean = re.sub(r'<minimax:tool_call>.*?</minimax:tool_call>', '', content, flags=re.DOTALL)
-        # 移除独立的 <invoke>...</invoke> 块
         clean = re.sub(r'<invoke[^>]*>.*?</invoke>', '', clean, flags=re.DOTALL)
         return clean.strip()
     
+    # ==================== 日志 ====================
+    
     def _log_request(self, params: dict[str, Any]) -> None:
-        """打印 API 请求详情（调试用）"""
+        """打印 API 请求详情"""
         if not self.show_request:
             return
         
         level = self.log_level
         
-        # ========== minimal: 一行摘要 ==========
         if level == "minimal":
             tools = params.get("tools", [])
             tool_names = [t.get("function", {}).get("name", "?") for t in tools]
             msgs = params.get("messages", [])
             last_user = next((m["content"][:50] for m in reversed(msgs) if m.get("role") == "user"), "")
-            print(f"📤 INPUT | model={params.get('model')} | tools={tool_names} | user=\"{last_user}...\"")
+            print(f"📤 INPUT | model={params.get('model')} | stream={params.get('stream')} | tools={tool_names} | user=\"{last_user}...\"")
             return
         
-        # ========== normal / verbose ==========
         print("\n" + "=" * 60)
         print("📤 LLM INPUT")
         print("=" * 60)
         print(f"🤖 Model: {params.get('model', 'N/A')} | Stream: {params.get('stream', False)}")
         
-        # 打印工具定义
         tools = params.get("tools", [])
         if tools:
             tool_names = [t.get("function", {}).get("name", "?") for t in tools]
             print(f"🔧 Tools: {tool_names}")
             
-            # verbose 模式显示工具详情
             if level == "verbose":
                 for t in tools:
                     func = t.get("function", {})
@@ -471,7 +450,6 @@ class OpenAILlm(BaseLlm):
                     if func_params.get("properties"):
                         print(f"      参数: {list(func_params['properties'].keys())}")
         
-        # 打印消息
         messages = params.get("messages", [])
         print(f"\n📝 Messages ({len(messages)}):")
         
@@ -480,10 +458,8 @@ class OpenAILlm(BaseLlm):
             content = msg.get("content", "")
             tool_calls = msg.get("tool_calls", [])
             
-            # normal 模式：简洁显示
             if level == "normal":
                 if role == "system":
-                    # system 消息只显示前 80 字符
                     preview = str(content).replace('\n', ' ')[:80]
                     print(f"  [{i+1}] SYSTEM: {preview}...")
                 elif role == "user":
@@ -498,8 +474,6 @@ class OpenAILlm(BaseLlm):
                 elif role == "tool":
                     result = str(content)[:40]
                     print(f"  [{i+1}] TOOL: {result}...")
-            
-            # verbose 模式：完整显示
             else:
                 print(f"\n  [{i+1}] 【{role.upper()}】")
                 if role == "assistant" and tool_calls:
@@ -521,13 +495,12 @@ class OpenAILlm(BaseLlm):
         print("=" * 60)
     
     def _log_response(self, response: 'LlmResponse') -> None:
-        """打印 API 响应详情（调试用）"""
+        """打印 API 响应详情"""
         if not self.show_request:
             return
         
         level = self.log_level
         
-        # ========== minimal: 一行摘要 ==========
         if level == "minimal":
             content_preview = str(response.content or "").replace('\n', ' ')[:50]
             tool_names = [fc.name for fc in response.function_calls] if response.function_calls else []
@@ -537,16 +510,13 @@ class OpenAILlm(BaseLlm):
                 print(f"📥 OUTPUT | content=\"{content_preview}...\"")
             return
         
-        # ========== normal / verbose ==========
         print("\n" + "=" * 60)
         print("📥 LLM OUTPUT")
         print("=" * 60)
         
-        # 基本信息
         if level == "verbose":
             print(f"🤖 Model: {response.model} | Finish: {response.finish_reason}")
         
-        # 思考内容
         if response.thinking:
             if self.show_thinking:
                 if level == "verbose":
@@ -559,14 +529,12 @@ class OpenAILlm(BaseLlm):
             else:
                 print(f"💭 Thinking: (已隐藏)")
         
-        # 主要内容
         if response.content:
             print(f"\n📝 Content:")
             if level == "verbose":
                 for line in response.content.split('\n'):
                     print(f"    {line}")
             else:
-                # normal: 显示完整内容但更紧凑
                 content = response.content.strip()
                 if len(content) > 200:
                     print(f"    {content[:200]}...")
@@ -574,7 +542,6 @@ class OpenAILlm(BaseLlm):
                 else:
                     print(f"    {content}")
         
-        # 工具调用
         if response.function_calls:
             print(f"\n🔧 Tool Calls:")
             for fc in response.function_calls:
@@ -588,7 +555,6 @@ class OpenAILlm(BaseLlm):
                         args_str = args_str[:60] + "..."
                     print(f"    → {fc.name}({args_str})")
         
-        # token 使用（仅 verbose）
         if level == "verbose" and response.usage:
             print(f"\n📊 Usage: prompt={response.usage.get('prompt_tokens', 'N/A')} | completion={response.usage.get('completion_tokens', 'N/A')} | total={response.usage.get('total_tokens', 'N/A')}")
         

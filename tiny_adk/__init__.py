@@ -29,7 +29,7 @@ Web 服务:
 - 请使用独立的 web 模块: from web import AgentService
 """
 
-from .agents import Agent, SequentialAgent, LoopAgent
+from .agents import Agent, BaseAgent, LlmAgent, SequentialAgent, LoopAgent
 from .config import Config, LLMConfig, RunnerConfig, get_config, set_config
 from .events import Event, EventType, EventActions, create_transfer_event, create_escalate_event
 from .runner import Runner
@@ -46,6 +46,8 @@ from .models import FunctionCall, ToolCall
 __all__ = [
     # 核心组件
     'Agent',
+    'BaseAgent',
+    'LlmAgent',
     'SequentialAgent',
     'LoopAgent',
     'Config',

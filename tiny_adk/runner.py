@@ -270,23 +270,24 @@ class Runner:
             # 获取 LLM
             llm = agent.llm or self._create_llm()
             
-            # 执行
-            result = agent.flow.run(agent, ctx.session, llm)
-            
-            # 追加响应事件
-            final_event = Event(
-                event_type=EventType.MODEL_RESPONSE,
-                content=result,
-            )
-            self.session_service.append_event_sync(ctx.session, final_event)
+            # 执行：收集所有事件并添加到 session
+            final_content = ""
+            event_count = 0
+            for event in agent.flow.run_stream(agent, ctx.session, llm):
+                event_count += 1
+                # 非 partial 事件追加到 Session
+                if not getattr(event, 'partial', False):
+                    self.session_service.append_event_sync(ctx.session, event)
+                if event.event_type == EventType.MODEL_RESPONSE:
+                    final_content = event.content or ""
             
             duration = time.time() - ctx.start_time
             logger.info(
                 f"[Runner] SUCCESS invocation_id={ctx.invocation_id} "
-                f"duration={duration:.2f}s"
+                f"duration={duration:.2f}s events={event_count}"
             )
             
-            return result
+            return final_content
             
         except Exception as e:
             duration = time.time() - ctx.start_time
