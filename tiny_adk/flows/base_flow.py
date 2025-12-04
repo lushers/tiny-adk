@@ -31,6 +31,12 @@ class BaseFlow(ABC):
     - Flow 不管理会话，只执行单次完整的交互循环
     - Flow 可以被不同的 Runner 复用
     - Flow 在 Agent 初始化时创建（通过 model_post_init）
+    
+    API 设计（统一接口）:
+    - run(stream: bool) -> Iterator[Event]: 同步执行
+    - run_async(stream: bool) -> AsyncIterator[Event]: 异步执行
+    - stream=False: 非流式，只 yield 一个 MODEL_RESPONSE 事件
+    - stream=True: 流式，yield 多个 MODEL_RESPONSE_DELTA + 最后一个 MODEL_RESPONSE
     """
     
     def __init__(self, max_iterations: int = 10):
@@ -43,40 +49,26 @@ class BaseFlow(ABC):
         self.max_iterations = max_iterations
         logger.debug(f"[{self.__class__.__name__}] Created with max_iterations={max_iterations}")
     
+    # ==================== 核心抽象方法 ====================
+    
     @abstractmethod
     def run(
         self,
         agent: Agent,
         session: Session,
         llm: BaseLlm,
-    ) -> str:
-        """
-        同步执行流程
-        
-        Args:
-            agent: 要执行的 Agent
-            session: 会话对象（包含历史消息）
-            llm: LLM 实例
-        
-        Returns:
-            最终的响应内容
-        """
-        pass
-    
-    @abstractmethod
-    def run_stream(
-        self,
-        agent: Agent,
-        session: Session,
-        llm: BaseLlm,
+        stream: bool = False,
     ) -> Iterator[Event]:
         """
-        同步流式执行
+        同步执行
         
         Args:
             agent: 要执行的 Agent
             session: 会话对象
             llm: LLM 实例
+            stream: 是否流式生成（传递给 LLM）
+                - False: 只 yield 一个 MODEL_RESPONSE 事件
+                - True: yield 多个 MODEL_RESPONSE_DELTA + 最后一个 MODEL_RESPONSE
         
         Yields:
             执行过程中的事件
@@ -89,34 +81,18 @@ class BaseFlow(ABC):
         agent: Agent,
         session: Session,
         llm: BaseLlm,
-    ) -> str:
-        """
-        异步执行流程
-        
-        Args:
-            agent: 要执行的 Agent
-            session: 会话对象
-            llm: LLM 实例
-        
-        Returns:
-            最终的响应内容
-        """
-        pass
-    
-    @abstractmethod
-    async def run_stream_async(
-        self,
-        agent: Agent,
-        session: Session,
-        llm: BaseLlm,
+        stream: bool = False,
     ) -> AsyncIterator[Event]:
         """
-        异步流式执行
+        异步执行
         
         Args:
             agent: 要执行的 Agent
             session: 会话对象
             llm: LLM 实例
+            stream: 是否流式生成（传递给 LLM）
+                - False: 只 yield 一个 MODEL_RESPONSE 事件
+                - True: yield 多个 MODEL_RESPONSE_DELTA + 最后一个 MODEL_RESPONSE
         
         Yields:
             执行过程中的事件
@@ -197,19 +173,32 @@ class BaseFlow(ABC):
             }
             json_type = type_mapping.get(param_type, 'string')
             
-            properties[param_name] = {
+            prop = {
                 'type': json_type,
                 'description': param_info.get('description', f'参数 {param_name}'),
             }
             
+            # 如果有枚举值（如 available_agents），添加 enum
+            if 'enum' in param_info:
+                prop['enum'] = param_info['enum']
+            
+            properties[param_name] = prop
+            
             if 'default' not in param_info:
                 required.append(param_name)
+        
+        # 使用工具的 to_function_declaration 获取描述（可能包含额外信息）
+        if hasattr(tool, 'to_function_declaration'):
+            decl = tool.to_function_declaration()
+            description = decl.get('description', tool.description)
+        else:
+            description = tool.description
         
         return {
             'type': 'function',
             'function': {
                 'name': tool.name,
-                'description': tool.description,
+                'description': description,
                 'parameters': {
                     'type': 'object',
                     'properties': properties,

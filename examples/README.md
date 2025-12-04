@@ -6,7 +6,7 @@
 
 ```
 ┌────────────────────────────────────────┐
-│  Runner: 会话管理 + 编排               │
+│  Runner: 执行编排（绑定 Agent）          │
 ├────────────────────────────────────────┤
 │  Flow: Reason-Act 循环 + 工具执行       │
 ├────────────────────────────────────────┤
@@ -18,34 +18,92 @@
 
 | 示例 | 描述 | 核心概念 |
 |------|------|---------|
-| `01_basic_agent.py` | 基础 Agent 用法 | Runner, Agent |
+| `01_basic_agent.py` | 基础 Agent 用法 | Runner, Agent, Session |
 | `02_agent_with_tools.py` | 带工具的 Agent | 工具调用, Flow |
 | `03_streaming.py` | 流式执行 | 流式输出, 事件 |
 | `04_async_basic.py` | 异步执行 | async/await |
 | `05_async_streaming.py` | 异步流式 | 异步 + 流式 |
+| `06_web_service.py` | **Web 服务** | FastAPI, SSE, Web 界面 |
 
-## 快速开始
+## 快速开始（ADK 风格）
 
 ```python
-from tiny_adk import Agent, Runner
+from tiny_adk import Agent, Runner, SessionService
 
-# 创建组件
-agent = Agent(name='助手', instruction='你是一个助手')
-runner = Runner()
+# 1. 创建 Agent
+agent = Agent(
+    name='助手',
+    instruction='你是一个助手',
+    model='your-model',
+)
 
-# 执行对话（使用 user_id 和 session_id）
-response = runner.run(
+# 2. 创建 Runner（绑定 Agent）
+session_service = SessionService()
+runner = Runner(
+    app_name="my_app",
     agent=agent,
+    session_service=session_service,
+)
+
+# 3. 创建 Session
+session_service.create_session_sync(
+    app_name="my_app",
+    user_id='user_001',
+    session_id='session_001'
+)
+
+# 4. 执行对话（不需要传 agent）
+response = runner.run(
     user_id='user_001',
     session_id='session_001',
     message='你好',
 )
 
-# 获取会话历史
-session = runner.get_session('user_001', 'session_001')
+# 5. 获取会话历史
+session = session_service.get_session_sync(
+    app_name="my_app",
+    user_id='user_001',
+    session_id='session_001'
+)
 for event in session.events:
     print(event.event_type, event.content)
 ```
+
+## Web 服务快速启动
+
+```python
+from tiny_adk import Agent
+from web import AgentService  # 独立的 web 模块
+
+# 创建 Agent
+agent = Agent(
+    name='智能助手',
+    instruction='你是一个智能助手',
+    model='your-model',
+)
+
+# 创建并启动服务
+service = AgentService(
+    app_name="my_chatbot",
+    agent=agent,
+)
+service.run(host="0.0.0.0", port=8000)
+```
+
+访问：
+- **Web 界面**: http://localhost:8000
+- **API 文档**: http://localhost:8000/docs
+
+## API 端点
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | `/api/sessions` | 创建会话 |
+| GET | `/api/sessions/{user_id}/{session_id}` | 获取会话 |
+| POST | `/api/chat` | 非流式对话 |
+| POST | `/api/chat/stream` | 流式对话 (SSE) |
+| DELETE | `/api/sessions/{user_id}/{session_id}` | 删除会话 |
+| GET | `/` | Web 聊天界面 |
 
 ## Runner API
 
@@ -54,7 +112,6 @@ for event in session.events:
 ```python
 # 非流式
 response = runner.run(
-    agent=agent,
     user_id='user_001',
     session_id='session_001',
     message='你好',
@@ -62,7 +119,6 @@ response = runner.run(
 
 # 流式
 for event in runner.run_stream(
-    agent=agent,
     user_id='user_001',
     session_id='session_001',
     message='你好',
@@ -76,7 +132,6 @@ for event in runner.run_stream(
 ```python
 # 非流式
 async for event in runner.run_async(
-    agent=agent,
     user_id='user_001',
     session_id='session_001',
     message='你好',
@@ -86,7 +141,6 @@ async for event in runner.run_async(
 
 # 流式
 async for event in runner.run_async(
-    agent=agent,
     user_id='user_001',
     session_id='session_001',
     message='你好',
@@ -110,7 +164,7 @@ llm = OpenAILlm(
 
 agent = Agent(
     name='助手',
-    model=llm,  # 传入 LLM 实例
+    llm=llm,  # 传入 LLM 实例
     instruction='你是一个助手',
 )
 ```
@@ -121,7 +175,15 @@ agent = Agent(
 from tiny_adk import Runner, SessionService
 
 # 可以实现自己的 SessionService（如 Redis、数据库）
-runner = Runner(session_service=SessionService())
+class RedisSessionService(SessionService):
+    # 重写方法连接 Redis
+    pass
+
+runner = Runner(
+    app_name="my_app",
+    agent=agent,
+    session_service=RedisSessionService(),
+)
 ```
 
 ### 3. 自定义 LLM
@@ -141,10 +203,16 @@ class MyCustomLlm(BaseLlm):
 ## 运行示例
 
 ```bash
+# 安装依赖
+pip install -r requirements.txt
+
 # 运行单个示例
 python examples/01_basic_agent.py
 python examples/02_agent_with_tools.py
 python examples/03_streaming.py
 python examples/04_async_basic.py
 python examples/05_async_streaming.py
+
+# 启动 Web 服务
+python examples/06_web_service.py
 ```

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} - Sessions</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+        
+        :root {
+            --bg-deep: #0a0e14;
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent-cyan: #39c5cf;
+            --accent-purple: #a371f7;
+            --accent-orange: #f0883e;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-blue: #58a6ff;
+            --border: #30363d;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+        
+        .btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 16px;
+            color: var(--text-primary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .btn:hover { background: var(--border); }
+        .btn-danger { border-color: var(--accent-red); color: var(--accent-red); }
+        .btn-danger:hover { background: rgba(248, 81, 73, 0.15); }
+        
+        .main-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 24px;
+            min-height: calc(100vh - 60px);
+        }
+        
+        .panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .panel-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .session-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+        
+        .session-item {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        
+        .session-item:hover { background: var(--bg-tertiary); }
+        .session-item.selected {
+            background: rgba(57, 197, 207, 0.1);
+            border-left: 3px solid var(--accent-cyan);
+        }
+        
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .session-id {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--accent-cyan);
+        }
+        
+        .session-events {
+            font-size: 12px;
+            color: var(--text-muted);
+            background: var(--bg-tertiary);
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+        
+        .session-message {
+            font-size: 14px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .session-user {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+        
+        .detail-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            gap: 12px;
+        }
+        
+        .empty-icon { font-size: 48px; opacity: 0.5; }
+        
+        /* Event Timeline */
+        .event-timeline {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .event-item {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 12px 16px;
+            border-left: 3px solid var(--border);
+        }
+        
+        .event-item.user_message { border-left-color: var(--accent-blue); }
+        .event-item.model_response { border-left-color: var(--accent-green); }
+        .event-item.tool_call { border-left-color: var(--accent-purple); }
+        .event-item.tool_response { border-left-color: var(--accent-orange); }
+        
+        .event-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .event-type {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        
+        .event-type.user_message { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); }
+        .event-type.model_response { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
+        .event-type.tool_call { background: rgba(163, 113, 247, 0.15); color: var(--accent-purple); }
+        .event-type.tool_response { background: rgba(240, 136, 62, 0.15); color: var(--accent-orange); }
+        
+        .event-time {
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-muted);
+        }
+        
+        .event-content {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .event-content.json {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            background: var(--bg-secondary);
+            padding: 10px;
+            border-radius: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        /* Session Info */
+        .session-info {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .info-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+        
+        .info-value {
+            font-size: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-primary);
+        }
+        
+        .info-value.highlight { color: var(--accent-cyan); }
+        
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        
+        @media (max-width: 900px) {
+            .main-content { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📋 {{ app_name }} Sessions</h1>
+        <div class="header-actions">
+            <a href="/" class="btn">💬 Chat</a>
+            <button class="btn" onclick="refresh()">🔄 刷新</button>
+            <button class="btn btn-danger" onclick="clearAll()">🗑️ 清空</button>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="panel">
+            <div class="panel-header">
+                <span class="panel-title">Session 列表</span>
+                <span id="sessionCount" style="font-size: 12px; color: var(--text-muted);">0 个</span>
+            </div>
+            <div class="session-list" id="sessionList">
+                <div class="empty-state">
+                    <div class="empty-icon">📭</div>
+                    <div>暂无 Session</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <div class="panel-header">
+                <span class="panel-title">事件详情</span>
+                <span id="eventCount" style="font-size: 12px; color: var(--text-muted);"></span>
+            </div>
+            <div class="detail-content" id="detailContent">
+                <div class="empty-state">
+                    <div class="empty-icon">👈</div>
+                    <div>选择一个 Session 查看事件</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSession = null;
+        
+        function formatTime(isoString) {
+            return new Date(isoString).toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+        }
+        
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function formatContent(content, eventType) {
+            if (typeof content === 'string') {
+                return `<div class="event-content">${escapeHtml(content)}</div>`;
+            }
+            return `<div class="event-content json">${escapeHtml(JSON.stringify(content, null, 2))}</div>`;
+        }
+        
+        async function loadSessions() {
+            try {
+                const response = await fetch('/api/sessions');
+                const data = await response.json();
+                const listEl = document.getElementById('sessionList');
+                
+                if (data.sessions.length === 0) {
+                    listEl.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">📭</div>
+                            <div>暂无 Session</div>
+                            <div style="font-size: 12px;">开始对话后这里会显示 Session</div>
+                        </div>
+                    `;
+                    document.getElementById('sessionCount').textContent = '0 个';
+                    return;
+                }
+                
+                document.getElementById('sessionCount').textContent = `${data.sessions.length} 个`;
+                
+                listEl.innerHTML = data.sessions.map(s => `
+                    <div class="session-item ${currentSession?.session_id === s.session_id ? 'selected' : ''}" 
+                         onclick="selectSession('${s.user_id}', '${s.session_id}')">
+                        <div class="session-header">
+                            <span class="session-id">${s.session_id.substring(0, 8)}...</span>
+                            <span class="session-events">${s.event_count} 事件</span>
+                        </div>
+                        <div class="session-message">${escapeHtml(s.first_message || '(空)')}</div>
+                        <div class="session-user">👤 ${s.user_id}</div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load sessions:', e);
+            }
+        }
+        
+        async function selectSession(userId, sessionId) {
+            try {
+                const response = await fetch(`/api/sessions/${userId}/${sessionId}`);
+                if (!response.ok) throw new Error('Failed to load session');
+                
+                const session = await response.json();
+                currentSession = session;
+                
+                // 更新选中状态
+                document.querySelectorAll('.session-item').forEach(el => {
+                    el.classList.toggle('selected', el.onclick.toString().includes(sessionId));
+                });
+                
+                renderEvents(session);
+            } catch (e) {
+                console.error('Failed to load session:', e);
+            }
+        }
+        
+        function renderEvents(session) {
+            const detailEl = document.getElementById('detailContent');
+            document.getElementById('eventCount').textContent = `${session.event_count} 个事件`;
+            
+            if (session.events.length === 0) {
+                detailEl.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📭</div>
+                        <div>该 Session 暂无事件</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Session 基本信息
+            const infoHtml = `
+                <div class="session-info">
+                    <div class="info-item">
+                        <span class="info-label">Session ID</span>
+                        <span class="info-value highlight">${session.session_id.substring(0, 12)}...</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">User ID</span>
+                        <span class="info-value">${session.user_id}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">事件数</span>
+                        <span class="info-value">${session.event_count}</span>
+                    </div>
+                </div>
+            `;
+            
+            // 事件时间线
+            const eventsHtml = session.events.map(event => `
+                <div class="event-item ${event.event_type}">
+                    <div class="event-header">
+                        <span class="event-type ${event.event_type}">${event.event_type}</span>
+                        <span class="event-time">${formatTime(event.timestamp)}</span>
+                    </div>
+                    ${formatContent(event.content, event.event_type)}
+                </div>
+            `).join('');
+            
+            detailEl.innerHTML = infoHtml + `<div class="event-timeline">${eventsHtml}</div>`;
+        }
+        
+        async function refresh() {
+            await loadSessions();
+            if (currentSession) {
+                await selectSession(currentSession.user_id, currentSession.session_id);
+            }
+        }
+        
+        async function clearAll() {
+            if (!confirm('确定要清空所有 Session 吗？')) return;
+            
+            try {
+                await fetch('/api/sessions', { method: 'DELETE' });
+                currentSession = null;
+                document.getElementById('detailContent').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">👈</div>
+                        <div>选择一个 Session 查看事件</div>
+                    </div>
+                `;
+                document.getElementById('eventCount').textContent = '';
+                loadSessions();
+            } catch (e) {
+                console.error('Failed to clear sessions:', e);
+            }
+        }
+        
+        // 初始化
+        loadSessions();
+        
+        // 自动刷新
+        setInterval(loadSessions, 5000);
+    </script>
+</body>
+</html>
+

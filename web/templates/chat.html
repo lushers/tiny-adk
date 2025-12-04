@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} - Chat</title>
+    <!-- Markdown 解析库 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- 代码高亮库 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@latest/build/highlight.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --success: #3fb950;
+            --border: #30363d;
+            --user-bg: #1f6feb;
+            --assistant-bg: #21262d;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .header .agent-badge {
+            background: var(--bg-tertiary);
+            color: var(--accent);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        
+        /* Session Bar */
+        .session-bar {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .session-bar label {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        
+        .session-bar input {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 12px;
+            color: var(--text-primary);
+            font-size: 13px;
+            width: 200px;
+        }
+        
+        .session-bar input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        .session-bar button {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 16px;
+            color: var(--text-primary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .session-bar button:hover {
+            background: var(--border);
+        }
+        
+        /* Chat Container */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            font-size: 14px;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .message.user {
+            align-self: flex-end;
+            background: var(--user-bg);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message.assistant {
+            align-self: flex-start;
+            background: var(--assistant-bg);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+        
+        /* Markdown 内容样式 */
+        .message.assistant .markdown-content {
+            line-height: 1.6;
+        }
+        
+        .message.assistant .markdown-content p {
+            margin: 0.5em 0;
+        }
+        
+        .message.assistant .markdown-content p:first-child {
+            margin-top: 0;
+        }
+        
+        .message.assistant .markdown-content p:last-child {
+            margin-bottom: 0;
+        }
+        
+        .message.assistant .markdown-content h1,
+        .message.assistant .markdown-content h2,
+        .message.assistant .markdown-content h3,
+        .message.assistant .markdown-content h4,
+        .message.assistant .markdown-content h5,
+        .message.assistant .markdown-content h6 {
+            margin: 1em 0 0.5em 0;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .message.assistant .markdown-content h1:first-child,
+        .message.assistant .markdown-content h2:first-child,
+        .message.assistant .markdown-content h3:first-child {
+            margin-top: 0;
+        }
+        
+        .message.assistant .markdown-content h1 { font-size: 1.5em; }
+        .message.assistant .markdown-content h2 { font-size: 1.3em; }
+        .message.assistant .markdown-content h3 { font-size: 1.15em; }
+        
+        .message.assistant .markdown-content ul,
+        .message.assistant .markdown-content ol {
+            margin: 0.5em 0;
+            padding-left: 1.5em;
+        }
+        
+        .message.assistant .markdown-content li {
+            margin: 0.25em 0;
+        }
+        
+        .message.assistant .markdown-content code {
+            background: rgba(110, 118, 129, 0.3);
+            padding: 0.15em 0.4em;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', 'Monaco', 'Consolas', monospace;
+            font-size: 0.9em;
+        }
+        
+        .message.assistant .markdown-content pre {
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin: 0.75em 0;
+            overflow-x: auto;
+            position: relative;
+        }
+        
+        .message.assistant .markdown-content pre code {
+            background: transparent;
+            padding: 0;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        .message.assistant .markdown-content blockquote {
+            border-left: 3px solid var(--accent);
+            margin: 0.75em 0;
+            padding-left: 1em;
+            color: var(--text-secondary);
+        }
+        
+        .message.assistant .markdown-content a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        .message.assistant .markdown-content a:hover {
+            text-decoration: underline;
+        }
+        
+        .message.assistant .markdown-content table {
+            border-collapse: collapse;
+            margin: 0.75em 0;
+            width: 100%;
+        }
+        
+        .message.assistant .markdown-content th,
+        .message.assistant .markdown-content td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+        }
+        
+        .message.assistant .markdown-content th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+        }
+        
+        .message.assistant .markdown-content hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 1em 0;
+        }
+        
+        .message.assistant .markdown-content strong {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .message.assistant .markdown-content em {
+            font-style: italic;
+        }
+        
+        /* 复制代码按钮 */
+        .message.assistant .markdown-content pre {
+            position: relative;
+        }
+        
+        .code-copy-btn {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        
+        .message.assistant .markdown-content pre:hover .code-copy-btn {
+            opacity: 1;
+        }
+        
+        .code-copy-btn:hover {
+            background: var(--border);
+            color: var(--text-primary);
+        }
+        
+        .message.tool {
+            align-self: flex-start;
+            background: transparent;
+            border: 1px dashed var(--border);
+            color: var(--text-secondary);
+            font-size: 12px;
+            padding: 8px 12px;
+        }
+        
+        .message.tool .tool-name {
+            color: var(--success);
+            font-weight: 500;
+        }
+        
+        .message.streaming::after {
+            content: '▊';
+            animation: blink 1s infinite;
+            color: var(--accent);
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        
+        /* Input Area */
+        .input-area {
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+            padding: 16px 24px;
+        }
+        
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        .input-wrapper textarea {
+            flex: 1;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: inherit;
+            resize: none;
+            min-height: 48px;
+            max-height: 120px;
+        }
+        
+        .input-wrapper textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        .input-wrapper button {
+            background: var(--accent);
+            border: none;
+            border-radius: 8px;
+            padding: 12px 24px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .input-wrapper button:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+        
+        .input-wrapper button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .input-wrapper textarea:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .input-wrapper button.sending {
+            background: var(--bg-tertiary);
+            position: relative;
+        }
+        
+        .input-wrapper button.sending::after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            border: 2px solid transparent;
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Status */
+        .status {
+            text-align: center;
+            padding: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        
+        .status.error {
+            color: #f85149;
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>💬 {{ app_name }}</h1>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <a href="/sessions" style="color: var(--text-secondary); text-decoration: none; font-size: 14px; padding: 6px 12px; border-radius: 6px; background: var(--bg-tertiary); transition: all 0.2s;" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background='var(--bg-tertiary)'">📋 Sessions</a>
+            <span class="agent-badge">🤖 {{ agent_name }}</span>
+        </div>
+    </div>
+    
+    <div class="session-bar">
+        <label>User ID:</label>
+        <input type="text" id="userId" value="user_001" />
+        <label>Session ID:</label>
+        <input type="text" id="sessionId" value="session_001" />
+        <button onclick="loadSession()">加载历史</button>
+        <button onclick="clearChat()">清空对话</button>
+    </div>
+    
+    <div class="chat-container" id="chatContainer">
+        <div class="status">输入消息开始对话...</div>
+    </div>
+    
+    <div class="input-area">
+        <div class="input-wrapper">
+            <textarea 
+                id="messageInput" 
+                placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                onkeydown="handleKeyDown(event)"
+            ></textarea>
+            <button id="sendBtn" onclick="sendMessage()">发送</button>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        
+        // 发送状态锁 - 防止连续多发
+        let isSending = false;
+        
+        // 配置 marked
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    try {
+                        return hljs.highlight(code, { language: lang }).value;
+                    } catch (e) {}
+                }
+                return code;
+            },
+            breaks: true,  // 支持 GFM 换行
+            gfm: true      // 启用 GitHub Flavored Markdown
+        });
+        
+        // 渲染 Markdown 并添加复制按钮
+        function renderMarkdown(content) {
+            if (!content) return '';
+            let html = marked.parse(content);
+            // 为代码块添加复制按钮
+            html = html.replace(/<pre><code/g, '<pre><button class="code-copy-btn" onclick="copyCode(this)">复制</button><code');
+            return `<div class="markdown-content">${html}</div>`;
+        }
+        
+        // 复制代码功能
+        function copyCode(btn) {
+            const code = btn.nextElementSibling.textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                btn.textContent = '已复制!';
+                setTimeout(() => btn.textContent = '复制', 1500);
+            });
+        }
+        
+        // 转义 HTML 防止 XSS（用于用户消息）
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function getUserId() {
+            return document.getElementById('userId').value || 'user_001';
+        }
+        
+        function getSessionId() {
+            return document.getElementById('sessionId').value || 'session_001';
+        }
+        
+        function handleKeyDown(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!isSending) {
+                    sendMessage();
+                }
+            }
+        }
+        
+        function setInputLocked(locked) {
+            isSending = locked;
+            sendBtn.disabled = locked;
+            messageInput.disabled = locked;
+            
+            if (locked) {
+                sendBtn.classList.add('sending');
+                sendBtn.textContent = '';
+            } else {
+                sendBtn.classList.remove('sending');
+                sendBtn.textContent = '发送';
+            }
+        }
+        
+        function addMessage(content, type, isStreaming = false) {
+            // 移除状态消息
+            const statusMsg = chatContainer.querySelector('.status');
+            if (statusMsg) statusMsg.remove();
+            
+            const msg = document.createElement('div');
+            msg.className = `message ${type}` + (isStreaming ? ' streaming' : '');
+            
+            // 对 assistant 消息使用 Markdown 渲染，对 user 消息转义 HTML
+            if (type === 'assistant') {
+                msg.innerHTML = renderMarkdown(content);
+            } else if (type === 'user') {
+                msg.innerHTML = escapeHtml(content);
+            } else {
+                msg.innerHTML = content;
+            }
+            
+            chatContainer.appendChild(msg);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return msg;
+        }
+        
+        function updateStreamingMessage(msg, content) {
+            // 流式输出时使用 Markdown 渲染
+            msg.innerHTML = renderMarkdown(content);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        function finishStreaming(msg) {
+            msg.classList.remove('streaming');
+        }
+        
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message || isSending) return;
+            
+            messageInput.value = '';
+            setInputLocked(true);
+            
+            // 添加用户消息
+            addMessage(message, 'user');
+            
+            // 创建助手消息占位
+            const assistantMsg = addMessage('', 'assistant', true);
+            let fullContent = '';
+            
+            try {
+                const response = await fetch('/api/chat/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: getUserId(),
+                        session_id: getSessionId(),
+                        message: message
+                    })
+                });
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const text = decoder.decode(value);
+                    const lines = text.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') {
+                                finishStreaming(assistantMsg);
+                                continue;
+                            }
+                            
+                            try {
+                                const event = JSON.parse(data);
+                                
+                                if (event.event_type === 'model_response_delta') {
+                                    fullContent += event.content || '';
+                                    updateStreamingMessage(assistantMsg, fullContent);
+                                } else if (event.event_type === 'model_response') {
+                                    if (event.content) {
+                                        fullContent = event.content;
+                                        updateStreamingMessage(assistantMsg, fullContent);
+                                    }
+                                    finishStreaming(assistantMsg);
+                                } else if (event.event_type === 'tool_call') {
+                                    const toolName = event.content?.name || 'unknown';
+                                    const args = JSON.stringify(event.content?.arguments || {});
+                                    addMessage(`<span class="tool-name">🔧 ${toolName}</span> ${args}`, 'tool');
+                                } else if (event.event_type === 'tool_response') {
+                                    const result = event.content?.result || '';
+                                    addMessage(`✅ ${result}`, 'tool');
+                                }
+                            } catch (e) {
+                                // 忽略解析错误
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                finishStreaming(assistantMsg);
+                updateStreamingMessage(assistantMsg, `❌ 错误: ${error.message}`);
+            }
+            
+            setInputLocked(false);
+            messageInput.focus();
+        }
+        
+        async function loadSession() {
+            try {
+                const response = await fetch(`/api/sessions/${getUserId()}/${getSessionId()}`);
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        chatContainer.innerHTML = '<div class="status">新会话，输入消息开始对话...</div>';
+                        return;
+                    }
+                    throw new Error('加载失败');
+                }
+                
+                const data = await response.json();
+                chatContainer.innerHTML = '';
+                
+                for (const event of data.events) {
+                    if (event.event_type === 'user_message') {
+                        addMessage(event.content, 'user');
+                    } else if (event.event_type === 'model_response') {
+                        addMessage(event.content || '', 'assistant');
+                    } else if (event.event_type === 'tool_call') {
+                        const toolName = event.content?.name || 'unknown';
+                        addMessage(`<span class="tool-name">🔧 ${toolName}</span>`, 'tool');
+                    } else if (event.event_type === 'tool_response') {
+                        const result = event.content?.result || '';
+                        addMessage(`✅ ${result}`, 'tool');
+                    }
+                }
+                
+                if (data.events.length === 0) {
+                    chatContainer.innerHTML = '<div class="status">会话为空，输入消息开始对话...</div>';
+                }
+            } catch (error) {
+                chatContainer.innerHTML = `<div class="status error">加载失败: ${error.message}</div>`;
+            }
+        }
+        
+        async function clearChat() {
+            try {
+                await fetch(`/api/sessions/${getUserId()}/${getSessionId()}`, {
+                    method: 'DELETE'
+                });
+            } catch (e) {}
+            
+            chatContainer.innerHTML = '<div class="status">对话已清空，输入消息开始新对话...</div>';
+        }
+        
+        // 自动调整 textarea 高度
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+    </script>
+</body>
+</html>
+

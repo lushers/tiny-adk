@@ -1,4 +1,4 @@
-"""示例 5: 异步流式执行 - 实时获取事件"""
+"""示例 5: 异步流式执行 - 实时获取事件（ADK 风格）"""
 
 import asyncio
 import sys
@@ -32,9 +32,13 @@ async def main():
         tools=[mock_task, get_weather],
     )
     
-    # 创建 SessionService 和 Runner
+    # 创建 Runner（绑定 Agent）
     session_service = SessionService()
-    runner = Runner(session_service=session_service)
+    runner = Runner(
+        app_name="stream_async_app",
+        agent=agent,
+        session_service=session_service,
+    )
     
     user_id = 'user_001'
     
@@ -47,10 +51,13 @@ async def main():
     print('🤖 Agent: ', end='', flush=True)
     
     # 创建 Session
-    await session_service.create_session(user_id=user_id, session_id='stream_1')
+    await session_service.create_session(
+        app_name="stream_async_app",
+        user_id=user_id,
+        session_id='stream_1'
+    )
     
     async for event in runner.run_async(
-        agent=agent,
         user_id=user_id,
         session_id='stream_1',
         message=user_msg,
@@ -67,10 +74,13 @@ async def main():
     print(f'📝 用户: {user_msg}')
     print('🤖 Agent: ', end='', flush=True)
     
-    await session_service.create_session(user_id=user_id, session_id='stream_2')
+    await session_service.create_session(
+        app_name="stream_async_app",
+        user_id=user_id,
+        session_id='stream_2'
+    )
     
     async for event in runner.run_async(
-        agent=agent,
         user_id=user_id,
         session_id='stream_2',
         message=user_msg,
@@ -96,7 +106,11 @@ async def main():
     async def stream_query(query: str, session_id: str, label: str):
         """并发流式查询"""
         # 创建 Session
-        await session_service.create_session(user_id=user_id, session_id=session_id)
+        await session_service.create_session(
+            app_name="stream_async_app",
+            user_id=user_id,
+            session_id=session_id
+        )
         
         responses = []
         tool_calls = []
@@ -104,7 +118,6 @@ async def main():
         print(f'  [{label}] 开始: {query}')
         
         async for event in runner.run_async(
-            agent=agent,
             user_id=user_id,
             session_id=session_id,
             message=query,
