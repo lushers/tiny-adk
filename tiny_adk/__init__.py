@@ -3,6 +3,8 @@ tiny_adk - 简化版 Agent Development Kit
 
 核心组件:
 - Agent: 定义 AI agent 的蓝图（Pydantic BaseModel）
+- SequentialAgent: 顺序执行多个子 Agent
+- LoopAgent: 循环执行子 Agent
 - Runner: 无状态执行引擎（绑定 Agent）
 - Tool/BaseTool: 可调用的工具函数
 - Session: 会话状态管理
@@ -10,6 +12,13 @@ tiny_adk - 简化版 Agent Development Kit
 - InvocationContext: 单次调用上下文
 - Event: 事件系统
 - Config: 配置管理
+
+多 Agent 支持:
+- sub_agents: 子 Agent 列表
+- parent_agent: 父 Agent（自动设置）
+- transfer_to_agent: 内置工具，用于 Agent 跳转
+- SequentialAgent: 顺序执行多个 Agent
+- LoopAgent: 循环执行直到 escalate
 
 架构:
 - Runner: 执行编排（绑定 Agent）
@@ -20,12 +29,12 @@ Web 服务:
 - 请使用独立的 web 模块: from web import AgentService
 """
 
-from .agents import Agent
+from .agents import Agent, SequentialAgent, LoopAgent
 from .config import Config, LLMConfig, RunnerConfig, get_config, set_config
-from .events import Event, EventType
+from .events import Event, EventType, EventActions, create_transfer_event, create_escalate_event
 from .runner import Runner
 from .session import Session, SessionService, InvocationContext
-from .tools import Tool, BaseTool, tool
+from .tools import Tool, BaseTool, tool, TransferToAgentTool, EscalateTool, create_transfer_tool, create_escalate_tool
 
 # Flow 层
 from .flows import BaseFlow, SimpleFlow
@@ -37,11 +46,14 @@ from .models import FunctionCall, ToolCall
 __all__ = [
     # 核心组件
     'Agent',
+    'SequentialAgent',
+    'LoopAgent',
     'Config',
     'LLMConfig',
     'RunnerConfig',
     'Event',
     'EventType',
+    'EventActions',
     'Runner',
     'Session',
     'SessionService',
@@ -51,6 +63,14 @@ __all__ = [
     'tool',
     'get_config',
     'set_config',
+    
+    # 多 Agent 工具
+    'TransferToAgentTool',
+    'EscalateTool',
+    'create_transfer_tool',
+    'create_escalate_tool',
+    'create_transfer_event',
+    'create_escalate_event',
     
     # Flow 层
     'BaseFlow',
@@ -65,4 +85,4 @@ __all__ = [
     'ToolCall',
 ]
 
-__version__ = '0.4.0'
+__version__ = '0.5.0'  # 多 Agent 支持

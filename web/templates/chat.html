@@ -221,6 +221,31 @@
             cursor: not-allowed;
         }
         
+        .input-wrapper textarea:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .input-wrapper button.sending {
+            background: var(--bg-tertiary);
+            position: relative;
+        }
+        
+        .input-wrapper button.sending::after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            border: 2px solid transparent;
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
         /* Status */
         .status {
             text-align: center;
@@ -290,6 +315,9 @@
         const messageInput = document.getElementById('messageInput');
         const sendBtn = document.getElementById('sendBtn');
         
+        // 发送状态锁 - 防止连续多发
+        let isSending = false;
+        
         function getUserId() {
             return document.getElementById('userId').value || 'user_001';
         }
@@ -301,7 +329,23 @@
         function handleKeyDown(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                sendMessage();
+                if (!isSending) {
+                    sendMessage();
+                }
+            }
+        }
+        
+        function setInputLocked(locked) {
+            isSending = locked;
+            sendBtn.disabled = locked;
+            messageInput.disabled = locked;
+            
+            if (locked) {
+                sendBtn.classList.add('sending');
+                sendBtn.textContent = '';
+            } else {
+                sendBtn.classList.remove('sending');
+                sendBtn.textContent = '发送';
             }
         }
         
@@ -329,10 +373,10 @@
         
         async function sendMessage() {
             const message = messageInput.value.trim();
-            if (!message) return;
+            if (!message || isSending) return;
             
             messageInput.value = '';
-            sendBtn.disabled = true;
+            setInputLocked(true);
             
             // 添加用户消息
             addMessage(message, 'user');
@@ -401,7 +445,7 @@
                 updateStreamingMessage(assistantMsg, `❌ 错误: ${error.message}`);
             }
             
-            sendBtn.disabled = false;
+            setInputLocked(false);
             messageInput.focus();
         }
         

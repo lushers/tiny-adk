@@ -197,19 +197,32 @@ class BaseFlow(ABC):
             }
             json_type = type_mapping.get(param_type, 'string')
             
-            properties[param_name] = {
+            prop = {
                 'type': json_type,
                 'description': param_info.get('description', f'参数 {param_name}'),
             }
             
+            # 如果有枚举值（如 available_agents），添加 enum
+            if 'enum' in param_info:
+                prop['enum'] = param_info['enum']
+            
+            properties[param_name] = prop
+            
             if 'default' not in param_info:
                 required.append(param_name)
+        
+        # 使用工具的 to_function_declaration 获取描述（可能包含额外信息）
+        if hasattr(tool, 'to_function_declaration'):
+            decl = tool.to_function_declaration()
+            description = decl.get('description', tool.description)
+        else:
+            description = tool.description
         
         return {
             'type': 'function',
             'function': {
                 'name': tool.name,
-                'description': tool.description,
+                'description': description,
                 'parameters': {
                     'type': 'object',
                     'properties': properties,

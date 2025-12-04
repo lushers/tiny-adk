@@ -187,3 +187,130 @@ def tool(name: str | None = None, description: str | None = None):
         return Tool(name=tool_name, description=tool_desc, func=func)
     
     return decorator
+
+
+# ==================== 内置工具：Agent 跳转 ====================
+
+class TransferToAgentTool(BaseTool):
+    """
+    内置工具：跳转到另一个 Agent
+    
+    让 LLM 可以主动决定将控制权交给其他 Agent。
+    这是多 Agent 协作的核心机制。
+    
+    使用场景：
+    - 主 Agent 识别到需要专业处理，跳转到专家 Agent
+    - 任务完成后返回给父 Agent
+    - 在多个专家 Agent 之间路由
+    """
+    
+    name: str = "transfer_to_agent"
+    description: str = "Transfer control to another agent. Use this when the task requires expertise from a different agent."
+    available_agents: list[str] = Field(default_factory=list)
+    """可以跳转到的 Agent 名称列表"""
+    
+    # parameters 在 model_post_init 中动态生成
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    
+    def model_post_init(self, __context: Any) -> None:
+        """初始化后动态生成 parameters，包含可用 agent 枚举"""
+        super().model_post_init(__context)
+        
+        agent_name_param = {
+            'type': 'str',
+            'description': 'The name of the agent to transfer control to',
+        }
+        
+        # 如果有可用 agent 列表，添加 enum 约束
+        if self.available_agents:
+            agent_name_param['enum'] = self.available_agents
+        
+        self.parameters = {
+            'agent_name': agent_name_param,
+            'reason': {
+                'type': 'str',
+                'description': 'Brief reason for the transfer',
+                'default': '',
+            },
+        }
+    
+    async def run_async(self, args: dict, context: Any = None) -> dict[str, Any]:
+        """
+        执行 Agent 跳转
+        
+        返回一个特殊的结果，Flow 会识别并触发跳转
+        """
+        agent_name = args.get('agent_name', '')
+        reason = args.get('reason', '')
+        
+        if not agent_name:
+            return {'error': 'agent_name is required'}
+        
+        if self.available_agents and agent_name not in self.available_agents:
+            return {
+                'error': f"Agent '{agent_name}' is not available. Available agents: {self.available_agents}"
+            }
+        
+        # 返回跳转信号
+        return {
+            'transfer': True,
+            'target_agent': agent_name,
+            'reason': reason,
+        }
+    
+    def to_function_declaration(self) -> dict[str, Any]:
+        """生成函数声明，包含可用 Agent 列表"""
+        desc = self.description
+        if self.available_agents:
+            desc += f"\n\nAvailable agents: {', '.join(self.available_agents)}"
+        
+        return {
+            'name': self.name,
+            'description': desc,
+            'parameters': self.parameters,
+        }
+
+
+class EscalateTool(BaseTool):
+    """
+    内置工具：向上级报告/退出循环
+    
+    用于 LoopAgent 场景，让 Agent 可以主动退出循环。
+    """
+    
+    name: str = "escalate"
+    description: str = "Signal that the current task is complete or needs to be escalated to a higher-level agent."
+    
+    parameters: dict[str, Any] = Field(default_factory=lambda: {
+        'reason': {
+            'type': 'str',
+            'description': 'Reason for escalation or completion status',
+            'default': 'Task completed',
+        },
+    })
+    
+    async def run_async(self, args: dict, context: Any = None) -> dict[str, Any]:
+        """执行 escalate"""
+        reason = args.get('reason', 'Task completed')
+        return {
+            'escalate': True,
+            'reason': reason,
+        }
+
+
+def create_transfer_tool(available_agents: list[str]) -> TransferToAgentTool:
+    """
+    创建 transfer_to_agent 工具
+    
+    Args:
+        available_agents: 可以跳转到的 Agent 名称列表
+        
+    Returns:
+        TransferToAgentTool 实例
+    """
+    return TransferToAgentTool(available_agents=available_agents)
+
+
+def create_escalate_tool() -> EscalateTool:
+    """创建 escalate 工具"""
+    return EscalateTool()

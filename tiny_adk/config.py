@@ -34,6 +34,11 @@ class RunnerConfig:
     """Runner 运行时配置"""
     show_thinking: bool = False
     show_request: bool = False
+    # 日志详细级别: minimal | normal | verbose
+    # - minimal: 只显示关键信息（模型、工具调用名称）
+    # - normal: 显示主要内容（默认）
+    # - verbose: 显示完整详细信息
+    log_level: str = "normal"
     # 注意：max_iterations 应该在 Agent 级别配置，不在 Runner 级别
     # 这符合 Google ADK 的设计理念：Agent 是配置，Runner 是无状态执行引擎
 
@@ -184,6 +189,8 @@ class Config:
                 self.runner.show_thinking = runner_data["show_thinking"]
             if "show_request" in runner_data:
                 self.runner.show_request = runner_data["show_request"]
+            if "log_level" in runner_data:
+                self.runner.log_level = runner_data["log_level"]
     
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -199,6 +206,7 @@ class Config:
             "runner": {
                 "show_thinking": self.runner.show_thinking,
                 "show_request": self.runner.show_request,
+                "log_level": self.runner.log_level,
             },
         }
     

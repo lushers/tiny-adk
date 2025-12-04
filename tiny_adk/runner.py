@@ -167,24 +167,33 @@ class Runner:
             # 4. 获取 LLM
             llm = agent.llm or self._create_llm()
             
-            # 5. 执行
+            # 5. 执行（使用 Agent 的 run_async，支持多 Agent 跳转）
             event_count = 0
+            current_agent = agent
+            
             if stream:
-                async for event in agent.flow.run_stream_async(agent, ctx.session, llm):
+                async for event in current_agent.run_async(ctx.session, llm):
                     event_count += 1
                     # 非 partial 事件追加到 Session
                     if not getattr(event, 'partial', False):
                         await self.session_service.append_event(ctx.session, event)
                     yield event
             else:
-                result = await agent.flow.run_async(agent, ctx.session, llm)
-                final_event = Event(
-                    event_type=EventType.MODEL_RESPONSE,
-                    content=result,
-                )
-                await self.session_service.append_event(ctx.session, final_event)
-                event_count += 1
-                yield final_event
+                # 非流式：收集所有事件，返回最后的响应
+                final_content = ""
+                async for event in current_agent.run_async(ctx.session, llm):
+                    event_count += 1
+                    if not getattr(event, 'partial', False):
+                        await self.session_service.append_event(ctx.session, event)
+                    if event.event_type == EventType.MODEL_RESPONSE:
+                        final_content = event.content or ""
+                
+                if final_content:
+                    yield Event(
+                        event_type=EventType.MODEL_RESPONSE,
+                        content=final_content,
+                        author=current_agent.name,
+                    )
             
             # 6. 记录成功
             duration = time.time() - ctx.start_time
@@ -424,4 +433,5 @@ class Runner:
             model=self._config.llm.model,
             show_thinking=self._config.runner.show_thinking,
             show_request=self._config.runner.show_request,
+            log_level=self._config.runner.log_level,
         )

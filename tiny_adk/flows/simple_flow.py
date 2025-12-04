@@ -1,11 +1,11 @@
-"""简单的 Reason-Act 循环实现"""
+"""简单的 Reason-Act 循环实现（支持多 Agent）"""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
-from typing import TYPE_CHECKING, AsyncIterator, Iterator
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional
 
 from .base_flow import BaseFlow
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from ..models import BaseLlm
     from ..session import Session
 
-from ..events import Event, EventType
+from ..events import Event, EventType, EventActions
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,7 @@ class SimpleFlow(BaseFlow):
         session.add_event(Event(
             event_type=EventType.MODEL_RESPONSE,
             content=response.content,
+            author=agent.name,
             metadata={
                 'model': response.model,
                 'thinking': response.thinking,
@@ -113,7 +114,7 @@ class SimpleFlow(BaseFlow):
                 event_type=EventType.ERROR,
                 content={'error': error_msg, 'iteration': iteration},
             )
-            session.add_event(event)
+            # 由 Runner 统一追加事件
             yield event
             return
         
@@ -138,13 +139,15 @@ class SimpleFlow(BaseFlow):
                 event = Event(
                     event_type=EventType.MODEL_RESPONSE,
                     content=response.content,
+                    author=agent.name,
                     metadata={
                         'model': response.model,
                         'thinking': response.thinking,
                         'finish_reason': response.finish_reason,
                     },
                 )
-                session.add_event(event)
+                # 注意：不在这里调用 session.add_event(event)
+                # 由 Runner 统一负责事件追加，避免重复
                 yield event
         
         # 处理工具调用
@@ -191,6 +194,7 @@ class SimpleFlow(BaseFlow):
         session.add_event(Event(
             event_type=EventType.MODEL_RESPONSE,
             content=response.content,
+            author=agent.name,
             metadata={
                 'model': response.model,
                 'thinking': response.thinking,
@@ -233,7 +237,7 @@ class SimpleFlow(BaseFlow):
                 event_type=EventType.ERROR,
                 content={'error': error_msg, 'iteration': iteration},
             )
-            session.add_event(event)
+            # 由 Runner 统一追加事件
             yield event
             return
         
@@ -256,13 +260,15 @@ class SimpleFlow(BaseFlow):
                 event = Event(
                     event_type=EventType.MODEL_RESPONSE,
                     content=response.content,
+                    author=agent.name,
                     metadata={
                         'model': response.model,
                         'thinking': response.thinking,
                         'finish_reason': response.finish_reason,
                     },
                 )
-                session.add_event(event)
+                # 注意：不在这里调用 session.add_event(event)
+                # 由 Runner 统一负责事件追加，避免重复
                 yield event
         
         # 处理工具调用
@@ -330,7 +336,7 @@ class SimpleFlow(BaseFlow):
                 'arguments': call_args,
             },
         )
-        session.add_event(event)
+        # 由 Runner 统一追加事件
         yield event
         
         tool = self.find_tool(agent, call_name)
@@ -349,7 +355,7 @@ class SimpleFlow(BaseFlow):
                         'result': str(result),
                     },
                 )
-                session.add_event(event)
+                # 由 Runner 统一追加事件
                 yield event
             except Exception as e:
                 logger.error(f"Tool {call_name} execution failed: {e}")
@@ -357,7 +363,7 @@ class SimpleFlow(BaseFlow):
                     event_type=EventType.ERROR,
                     content={'tool': call_name, 'error': str(e)},
                 )
-                session.add_event(event)
+                # 由 Runner 统一追加事件
                 yield event
     
     async def _execute_tool_async(self, agent, session, function_call) -> None:
@@ -404,7 +410,7 @@ class SimpleFlow(BaseFlow):
                 ))
     
     async def _execute_tool_stream_async(self, agent, session, function_call) -> AsyncIterator[Event]:
-        """异步流式执行工具"""
+        """异步流式执行工具（支持 Agent 跳转）"""
         call_id = function_call.id
         call_name = function_call.name
         call_args = function_call.args if hasattr(function_call, 'args') else function_call.arguments
@@ -416,8 +422,9 @@ class SimpleFlow(BaseFlow):
                 'name': call_name,
                 'arguments': call_args,
             },
+            author=agent.name,
         )
-        session.add_event(event)
+        # 由 Runner 统一追加事件
         yield event
         
         tool = self.find_tool(agent, call_name)
@@ -432,6 +439,46 @@ class SimpleFlow(BaseFlow):
                 else:
                     result = await asyncio.to_thread(tool.run, call_args, None)
                 
+                # 检查是否是 Agent 跳转
+                if isinstance(result, dict) and result.get('transfer'):
+                    target_agent = result.get('target_agent', '')
+                    reason = result.get('reason', '')
+                    
+                    event = Event(
+                        event_type=EventType.AGENT_TRANSFER,
+                        content={
+                            'from_agent': agent.name,
+                            'target_agent': target_agent,
+                            'reason': reason,
+                        },
+                        author=agent.name,
+                        actions=EventActions(transfer_to_agent=target_agent),
+                        metadata={'transfer_to_agent': target_agent},
+                    )
+                    # 由 Runner 统一追加事件
+                    yield event
+                    return
+                
+                # 检查是否是 escalate
+                if isinstance(result, dict) and result.get('escalate'):
+                    reason = result.get('reason', 'Task completed')
+                    
+                    event = Event(
+                        event_type=EventType.TOOL_RESPONSE,
+                        content={
+                            'call_id': call_id,
+                            'name': call_name,
+                            'result': reason,
+                        },
+                        author=agent.name,
+                        actions=EventActions(escalate=True),
+                        metadata={'escalate': True},
+                    )
+                    # 由 Runner 统一追加事件
+                    yield event
+                    return
+                
+                # 普通工具响应
                 event = Event(
                     event_type=EventType.TOOL_RESPONSE,
                     content={
@@ -439,14 +486,16 @@ class SimpleFlow(BaseFlow):
                         'name': call_name,
                         'result': str(result),
                     },
+                    author=agent.name,
                 )
-                session.add_event(event)
+                # 由 Runner 统一追加事件
                 yield event
             except Exception as e:
                 logger.error(f"Tool {call_name} execution failed: {e}")
                 event = Event(
                     event_type=EventType.ERROR,
                     content={'tool': call_name, 'error': str(e)},
+                    author=agent.name,
                 )
-                session.add_event(event)
+                # 由 Runner 统一追加事件
                 yield event
