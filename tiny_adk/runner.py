@@ -37,6 +37,15 @@ from .flows import SimpleFlow
 from .models import BaseLlm, OpenAILlm
 from .session import Session, SessionService, InvocationContext
 
+# Memory 支持（可选）
+try:
+    from .memory import BaseMemoryService, MemoryToolContext
+    MEMORY_AVAILABLE = True
+except ImportError:
+    MEMORY_AVAILABLE = False
+    BaseMemoryService = None
+    MemoryToolContext = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,12 +90,15 @@ class Runner:
     """绑定的 Agent（只读配置）"""
     session_service: SessionService
     """Session 持久化服务"""
+    memory_service: Optional['BaseMemoryService']
+    """Memory 服务（可选）"""
     
     def __init__(
         self,
         app_name: str,
         agent: Agent,
         session_service: SessionService,
+        memory_service: Optional['BaseMemoryService'] = None,
         config: Config | None = None,
     ):
         """
@@ -96,11 +108,13 @@ class Runner:
             app_name: 应用名称（用于 Session 隔离）
             agent: 绑定的 Agent 实例
             session_service: Session 持久化服务
+            memory_service: Memory 服务（可选，用于跨会话记忆）
             config: 配置对象
         """
         self.app_name = app_name
         self.agent = agent
         self.session_service = session_service
+        self.memory_service = memory_service
         self._config = config or get_config()
     
     # ==================== 异步 API ====================
@@ -167,7 +181,18 @@ class Runner:
             # 4. 获取 LLM
             llm = agent.llm or self._create_llm()
             
-            # 5. 执行（使用 Agent 的 run_async，支持多 Agent 跳转）
+            # 5. 设置 Memory 上下文（如果有）
+            if self.memory_service and hasattr(agent, 'flow') and hasattr(agent.flow, 'set_memory_context'):
+                agent.flow.set_memory_context(
+                    memory_service=self.memory_service,
+                    app_name=self.app_name,
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_query=message,
+                )
+                logger.debug(f"[Runner] Set memory context for agent {agent.name}")
+            
+            # 6. 执行（使用 Agent 的 run_async，支持多 Agent 跳转）
             event_count = 0
             current_agent = agent
             

@@ -138,10 +138,16 @@ class LlmAgent(BaseAgent):
         prompt = f"You are {self.name}.\n\n{self.instruction}\n\n"
         
         if self.tools:
-            prompt += "You have access to the following tools:\n"
-            for tool in self.tools:
-                prompt += f"- {tool.name}: {tool.description}\n"
-            prompt += "\n"
+            # 过滤掉预处理工具（如 PreloadMemoryTool），它们不暴露给模型
+            visible_tools = [
+                tool for tool in self.tools 
+                if not getattr(tool, 'is_preprocessing', False)
+            ]
+            if visible_tools:
+                prompt += "You have access to the following tools:\n"
+                for tool in visible_tools:
+                    prompt += f"- {tool.name}: {tool.description}\n"
+                prompt += "\n"
         
         transferable = self.get_transferable_agents()
         if transferable:

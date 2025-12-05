@@ -43,6 +43,23 @@ from .flows import BaseFlow, SimpleFlow
 from .models import BaseLlm, LlmRequest, LlmResponse, OpenAILlm
 from .models import FunctionCall, ToolCall
 
+# Memory 层
+from .memory import (
+    MemoryEntry,
+    BaseMemoryService,
+    SearchResult,
+    InMemoryService,
+    VectorMemoryService,
+    MemoryManager,
+    # Memory 工具
+    MemoryToolContext,
+    PreloadMemoryTool,
+    LoadMemoryTool,
+    preload_memory_tool,
+    load_memory_tool,
+)
+from .memory.memory_entry import MemoryType
+
 __all__ = [
     # 核心组件
     'Agent',
@@ -85,6 +102,21 @@ __all__ = [
     'OpenAILlm',
     'FunctionCall',
     'ToolCall',
+    
+    # Memory 层
+    'MemoryEntry',
+    'MemoryType',
+    'BaseMemoryService',
+    'SearchResult',
+    'InMemoryService',
+    'VectorMemoryService',
+    'MemoryManager',
+    # Memory 工具
+    'MemoryToolContext',
+    'PreloadMemoryTool',
+    'LoadMemoryTool',
+    'preload_memory_tool',
+    'load_memory_tool',
 ]
 
-__version__ = '0.5.0'  # 多 Agent 支持
+__version__ = '0.6.0'  # Memory 支持
