@@ -236,63 +236,80 @@ class SimpleFlow(BaseFlow):
         stream: bool = False,
     ) -> Iterator[Event]:
         """
-        同步执行
+        同步执行 Reason-Act 循环
         
         Args:
             stream: 是否流式生成（传递给 LLM）
         """
-        yield from self._reason_act_loop(agent, session, llm, stream=stream, iteration=0)
-    
-    def _reason_act_loop(
-        self,
-        agent: 'Agent',
-        session: 'Session',
-        llm: 'BaseLlm',
-        stream: bool,
-        iteration: int,
-    ) -> Iterator[Event]:
-        """同步 Reason-Act 循环"""
-        if iteration >= self.max_iterations:
-            yield Event(
-                event_type=EventType.ERROR,
-                content={'error': f"达到最大迭代次数限制 ({self.max_iterations})"},
-            )
-            return
+        iteration = 0
+        max_iterations = self.get_max_iterations(agent)
         
-        logger.debug(f"[SimpleFlow] Iteration {iteration + 1}")
-        
-        # 构建请求
-        request = self.build_request(agent, session)
-        
-        # 调用 LLM（统一生成器接口）
-        final_response = None
-        for response in llm.generate(request, stream=stream):
-            if response.partial:
-                # 流式增量
-                yield Event(
-                    event_type=EventType.MODEL_RESPONSE_DELTA,
-                    content=response.delta,
-                    metadata={'chunk_index': response.metadata.get('chunk_index')},
-                )
+        while iteration < max_iterations:
+            logger.debug(f"[SimpleFlow] Iteration {iteration + 1}")
+            
+            # 1. 构建请求
+            request = self.build_request(agent, session)
+            
+            # 2. before_model_callback
+            if self.before_model_callback:
+                callback_result = self.before_model_callback(request, agent, session)
+                if callback_result is not None:
+                    # 回调可以返回 LlmResponse 来跳过 LLM 调用
+                    yield Event(
+                        event_type=EventType.MODEL_RESPONSE,
+                        content=callback_result.content if hasattr(callback_result, 'content') else str(callback_result),
+                        author=agent.name,
+                    )
+                    return
+            
+            # 3. 调用 LLM
+            final_response = None
+            for response in llm.generate(request, stream=stream):
+                if response.partial:
+                    yield Event(
+                        event_type=EventType.MODEL_RESPONSE_DELTA,
+                        content=response.delta,
+                        metadata={'chunk_index': response.metadata.get('chunk_index')},
+                    )
+                else:
+                    final_response = response
+                    
+                    # 4. 执行响应处理器
+                    for processor in self.response_processors:
+                        processor.process(response, agent, session)
+                    
+                    # 5. after_model_callback
+                    if self.after_model_callback:
+                        altered = self.after_model_callback(response, agent, session)
+                        if altered is not None:
+                            final_response = altered
+                    
+                    yield Event(
+                        event_type=EventType.MODEL_RESPONSE,
+                        content=final_response.content,
+                        author=agent.name,
+                        metadata={
+                            'model': final_response.model,
+                            'thinking': final_response.thinking,
+                            'finish_reason': final_response.finish_reason,
+                        },
+                    )
+            
+            # 6. 处理工具调用
+            if final_response and final_response.has_function_calls():
+                for fc in final_response.function_calls:
+                    yield from self._execute_tool(agent, session, fc)
+                iteration += 1
+                # 继续循环
             else:
-                # 完整响应
-                final_response = response
-                yield Event(
-                    event_type=EventType.MODEL_RESPONSE,
-                    content=response.content,
-                    author=agent.name,
-                    metadata={
-                        'model': response.model,
-                        'thinking': response.thinking,
-                        'finish_reason': response.finish_reason,
-                    },
-                )
+                # 没有工具调用，结束循环
+                return
         
-        # 处理工具调用
-        if final_response and final_response.has_function_calls():
-            for fc in final_response.function_calls:
-                yield from self._execute_tool(agent, session, fc)
-            yield from self._reason_act_loop(agent, session, llm, stream, iteration + 1)
+        # 达到最大迭代次数
+        yield Event(
+            event_type=EventType.ERROR,
+            content={'error': f"达到最大迭代次数限制 ({max_iterations})"},
+        )
     
     # ==================== 异步执行 ====================
     
@@ -304,66 +321,84 @@ class SimpleFlow(BaseFlow):
         stream: bool = False,
     ) -> AsyncIterator[Event]:
         """
-        异步执行
+        异步执行 Reason-Act 循环
         
         Args:
             stream: 是否流式生成（传递给 LLM）
         """
-        async for event in self._reason_act_loop_async(agent, session, llm, stream=stream, iteration=0):
-            yield event
-    
-    async def _reason_act_loop_async(
-        self,
-        agent: 'Agent',
-        session: 'Session',
-        llm: 'BaseLlm',
-        stream: bool,
-        iteration: int,
-    ) -> AsyncIterator[Event]:
-        """异步 Reason-Act 循环"""
-        if iteration >= self.max_iterations:
-            yield Event(
-                event_type=EventType.ERROR,
-                content={'error': f"达到最大迭代次数限制 ({self.max_iterations})"},
-            )
-            return
+        iteration = 0
+        max_iterations = self.get_max_iterations(agent)
         
-        logger.debug(f"[SimpleFlow] Async iteration {iteration + 1}")
-        
-        # 构建请求（使用异步版本以支持 preload memory）
-        request = await self.build_request_async(agent, session)
-        
-        # 调用 LLM（统一生成器接口）
-        final_response = None
-        async for response in llm.generate_async(request, stream=stream):
-            if response.partial:
-                # 流式增量
-                yield Event(
-                    event_type=EventType.MODEL_RESPONSE_DELTA,
-                    content=response.delta,
-                    metadata={'chunk_index': response.metadata.get('chunk_index')},
-                )
+        while iteration < max_iterations:
+            logger.debug(f"[SimpleFlow] Async iteration {iteration + 1}")
+            
+            # 1. 构建请求（使用异步版本以支持 preload memory）
+            request = await self.build_request_async(agent, session)
+            
+            # 2. before_model_callback
+            if self.before_model_callback:
+                callback_result = self.before_model_callback(request, agent, session)
+                if inspect.isawaitable(callback_result):
+                    callback_result = await callback_result
+                if callback_result is not None:
+                    yield Event(
+                        event_type=EventType.MODEL_RESPONSE,
+                        content=callback_result.content if hasattr(callback_result, 'content') else str(callback_result),
+                        author=agent.name,
+                    )
+                    return
+            
+            # 3. 调用 LLM
+            final_response = None
+            async for response in llm.generate_async(request, stream=stream):
+                if response.partial:
+                    yield Event(
+                        event_type=EventType.MODEL_RESPONSE_DELTA,
+                        content=response.delta,
+                        metadata={'chunk_index': response.metadata.get('chunk_index')},
+                    )
+                else:
+                    final_response = response
+                    
+                    # 4. 执行响应处理器
+                    for processor in self.response_processors:
+                        await processor.process_async(response, agent, session)
+                    
+                    # 5. after_model_callback
+                    if self.after_model_callback:
+                        altered = self.after_model_callback(response, agent, session)
+                        if inspect.isawaitable(altered):
+                            altered = await altered
+                        if altered is not None:
+                            final_response = altered
+                    
+                    yield Event(
+                        event_type=EventType.MODEL_RESPONSE,
+                        content=final_response.content,
+                        author=agent.name,
+                        metadata={
+                            'model': final_response.model,
+                            'thinking': final_response.thinking,
+                            'finish_reason': final_response.finish_reason,
+                        },
+                    )
+            
+            # 6. 处理工具调用
+            if final_response and final_response.has_function_calls():
+                for fc in final_response.function_calls:
+                    async for event in self._execute_tool_async(agent, session, fc):
+                        yield event
+                iteration += 1
+                # 继续循环
             else:
-                # 完整响应
-                final_response = response
-                yield Event(
-                    event_type=EventType.MODEL_RESPONSE,
-                    content=response.content,
-                    author=agent.name,
-                    metadata={
-                        'model': response.model,
-                        'thinking': response.thinking,
-                        'finish_reason': response.finish_reason,
-                    },
-                )
+                # 没有工具调用，结束循环
+                return
         
-        # 处理工具调用
-        if final_response and final_response.has_function_calls():
-            for fc in final_response.function_calls:
-                async for event in self._execute_tool_async(agent, session, fc):
-                    yield event
-            async for event in self._reason_act_loop_async(agent, session, llm, stream, iteration + 1):
-                yield event
+        # 达到最大迭代次数
+        yield Event(
+            event_type=EventType.ERROR,
+            content={'error': f"达到最大迭代次数限制 ({max_iterations})"},
+        )
     
     # ==================== 工具执行（只 yield 事件）====================
     
@@ -392,13 +427,29 @@ class SimpleFlow(BaseFlow):
         tool = self.find_tool(agent, call_name)
         if tool:
             try:
-                # 传递 memory_context 给工具（如果有）
-                context = self._memory_context
+                # before_tool_callback
+                if self.before_tool_callback:
+                    override = self.before_tool_callback(tool, call_args, agent, session)
+                    if override is not None:
+                        # 回调可以返回结果来跳过工具执行
+                        yield Event(
+                            event_type=EventType.TOOL_RESPONSE,
+                            content={'call_id': call_id, 'name': call_name, 'result': str(override)},
+                        )
+                        return
                 
+                # 执行工具
+                context = self._memory_context
                 if hasattr(tool, 'run'):
                     result = tool.run(call_args, context)
                 else:
                     result = tool.execute(**call_args)
+                
+                # after_tool_callback
+                if self.after_tool_callback:
+                    altered = self.after_tool_callback(tool, call_args, result, agent, session)
+                    if altered is not None:
+                        result = altered
                 
                 yield Event(
                     event_type=EventType.TOOL_RESPONSE,
@@ -410,6 +461,9 @@ class SimpleFlow(BaseFlow):
                 )
             except Exception as e:
                 logger.error(f"Tool {call_name} execution failed: {e}")
+                # on_error_callback
+                if self.on_error_callback:
+                    self.on_error_callback(e, tool, call_args, agent, session)
                 yield Event(
                     event_type=EventType.ERROR,
                     content={'tool': call_name, 'error': str(e)},
@@ -421,7 +475,7 @@ class SimpleFlow(BaseFlow):
         session: 'Session', 
         function_call,
     ) -> AsyncIterator[Event]:
-        """异步执行工具（支持 Agent 跳转 + Memory）"""
+        """异步执行工具（支持 Agent 跳转 + Memory + 回调）"""
         call_id = function_call.id
         call_name = function_call.name
         call_args = function_call.args if hasattr(function_call, 'args') else function_call.arguments
@@ -440,9 +494,20 @@ class SimpleFlow(BaseFlow):
         tool = self.find_tool(agent, call_name)
         if tool:
             try:
-                # 传递 memory_context 给工具（如果有）
-                context = self._memory_context
+                # before_tool_callback
+                if self.before_tool_callback:
+                    override = self.before_tool_callback(tool, call_args, agent, session)
+                    if inspect.isawaitable(override):
+                        override = await override
+                    if override is not None:
+                        yield Event(
+                            event_type=EventType.TOOL_RESPONSE,
+                            content={'call_id': call_id, 'name': call_name, 'result': str(override)},
+                        )
+                        return
                 
+                # 执行工具
+                context = self._memory_context
                 if hasattr(tool, 'run_async'):
                     result = await tool.run_async(call_args, context)
                 elif hasattr(tool, 'func') and inspect.iscoroutinefunction(tool.func):
@@ -451,6 +516,14 @@ class SimpleFlow(BaseFlow):
                     result = await asyncio.to_thread(tool.execute, **call_args)
                 else:
                     result = await asyncio.to_thread(tool.run, call_args, context)
+                
+                # after_tool_callback
+                if self.after_tool_callback:
+                    altered = self.after_tool_callback(tool, call_args, result, agent, session)
+                    if inspect.isawaitable(altered):
+                        altered = await altered
+                    if altered is not None:
+                        result = altered
                 
                 # 检查是否是 Agent 跳转
                 if call_name == 'transfer_to_agent':
@@ -465,7 +538,6 @@ class SimpleFlow(BaseFlow):
                         },
                         metadata={'transfer_to_agent': target_agent_name},
                     )
-                # 检查是否是 escalate
                 elif call_name == 'escalate':
                     yield Event(
                         event_type=EventType.TOOL_RESPONSE,
@@ -487,6 +559,11 @@ class SimpleFlow(BaseFlow):
                     )
             except Exception as e:
                 logger.error(f"Tool {call_name} execution failed: {e}")
+                # on_error_callback
+                if self.on_error_callback:
+                    err_result = self.on_error_callback(e, tool, call_args, agent, session)
+                    if inspect.isawaitable(err_result):
+                        await err_result
                 yield Event(
                     event_type=EventType.ERROR,
                     content={'tool': call_name, 'error': str(e)},

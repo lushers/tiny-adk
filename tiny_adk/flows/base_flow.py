@@ -4,16 +4,54 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterator, Optional
 
 if TYPE_CHECKING:
     from ..agents import Agent
     from ..events import Event
-    from ..models import BaseLlm, LlmRequest
+    from ..models import BaseLlm, LlmRequest, LlmResponse
     from ..session import Session, InvocationContext
     from ..tools import BaseTool, Tool
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== Processor 协议（简化版）====================
+
+class RequestProcessor:
+    """
+    请求处理器协议
+    
+    在 LLM 请求发送前处理请求，可用于：
+    - 添加自定义 system prompt
+    - 注入上下文信息
+    - 请求日志记录
+    """
+    def process(self, request: 'LlmRequest', agent: 'Agent', session: 'Session') -> None:
+        """处理请求（原地修改）"""
+        pass
+    
+    async def process_async(self, request: 'LlmRequest', agent: 'Agent', session: 'Session') -> None:
+        """异步处理请求"""
+        self.process(request, agent, session)
+
+
+class ResponseProcessor:
+    """
+    响应处理器协议
+    
+    在 LLM 响应返回后处理响应，可用于：
+    - 响应日志记录
+    - 内容过滤
+    - 统计信息收集
+    """
+    def process(self, response: 'LlmResponse', agent: 'Agent', session: 'Session') -> None:
+        """处理响应（原地修改）"""
+        pass
+    
+    async def process_async(self, response: 'LlmResponse', agent: 'Agent', session: 'Session') -> None:
+        """异步处理响应"""
+        self.process(response, agent, session)
 
 
 class BaseFlow(ABC):
@@ -31,6 +69,14 @@ class BaseFlow(ABC):
     - Flow 不管理会话，只执行单次完整的交互循环
     - Flow 可以被不同的 Runner 复用
     - Flow 在 Agent 初始化时创建（通过 model_post_init）
+    - max_iterations 由 Agent 定义，Flow 从 Agent 获取
+    
+    扩展机制:
+    - request_processors: 请求处理器链（在 LLM 调用前执行）
+    - response_processors: 响应处理器链（在 LLM 调用后执行）
+    - before_model_callback: 模型调用前回调
+    - after_model_callback: 模型调用后回调
+    - on_tool_callback: 工具执行回调
     
     API 设计（统一接口）:
     - run(stream: bool) -> Iterator[Event]: 同步执行
@@ -39,15 +85,27 @@ class BaseFlow(ABC):
     - stream=True: 流式，yield 多个 MODEL_RESPONSE_DELTA + 最后一个 MODEL_RESPONSE
     """
     
-    def __init__(self, max_iterations: int = 10):
-        """
-        初始化 Flow
+    # 默认最大迭代次数（当 Agent 未指定时使用）
+    DEFAULT_MAX_ITERATIONS = 10
+    
+    def __init__(self):
+        """初始化 Flow"""
+        # 处理器链（可扩展）
+        self.request_processors: list[RequestProcessor] = []
+        self.response_processors: list[ResponseProcessor] = []
         
-        Args:
-            max_iterations: 最大循环次数，防止无限循环
-        """
-        self.max_iterations = max_iterations
-        logger.debug(f"[{self.__class__.__name__}] Created with max_iterations={max_iterations}")
+        # 回调钩子（可选）
+        self.before_model_callback: Optional[Callable] = None
+        self.after_model_callback: Optional[Callable] = None
+        self.before_tool_callback: Optional[Callable] = None
+        self.after_tool_callback: Optional[Callable] = None
+        self.on_error_callback: Optional[Callable] = None
+        
+        logger.debug(f"[{self.__class__.__name__}] Created")
+    
+    def get_max_iterations(self, agent: 'Agent') -> int:
+        """从 Agent 获取最大迭代次数"""
+        return getattr(agent, 'max_iterations', self.DEFAULT_MAX_ITERATIONS)
     
     # ==================== 核心抽象方法 ====================
     
@@ -103,12 +161,13 @@ class BaseFlow(ABC):
     
     def build_request(
         self,
-        agent: Agent,
-        session: Session,
-    ) -> LlmRequest:
+        agent: 'Agent',
+        session: 'Session',
+    ) -> 'LlmRequest':
         """
         构建 LLM 请求
         
+        会自动执行 request_processors 链
         子类可以覆盖此方法来自定义请求构建逻辑
         """
         from ..models import LlmRequest
@@ -142,6 +201,55 @@ class BaseFlow(ABC):
         # 添加工具定义
         if agent.tools:
             request.tools = [self._tool_to_openai_format(tool) for tool in agent.tools]
+        
+        # 执行请求处理器链
+        for processor in self.request_processors:
+            processor.process(request, agent, session)
+        
+        return request
+    
+    async def build_request_async(
+        self,
+        agent: 'Agent',
+        session: 'Session',
+    ) -> 'LlmRequest':
+        """
+        异步构建 LLM 请求
+        
+        会自动执行 request_processors 链（异步版本）
+        """
+        from ..models import LlmRequest
+        
+        request = LlmRequest(
+            model=agent.get_model_name() if hasattr(agent, 'get_model_name') else agent.model,
+            temperature=agent.temperature,
+            max_tokens=agent.max_tokens,
+        )
+        
+        request.add_message("system", agent.get_system_prompt())
+        
+        for msg in session.get_conversation_history():
+            if msg.get("tool_calls"):
+                request.add_tool_call_message(
+                    role=msg["role"],
+                    content=msg.get("content"),
+                    tool_calls=msg["tool_calls"],
+                )
+            elif msg.get("role") == "tool":
+                request.add_tool_response_message(
+                    tool_call_id=msg.get("tool_call_id", ""),
+                    name=msg.get("name", ""),
+                    content=msg.get("content", ""),
+                )
+            else:
+                request.messages.append(msg)
+        
+        if agent.tools:
+            request.tools = [self._tool_to_openai_format(tool) for tool in agent.tools]
+        
+        # 执行请求处理器链（异步）
+        for processor in self.request_processors:
+            await processor.process_async(request, agent, session)
         
         return request
     

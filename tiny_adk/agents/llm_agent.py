@@ -60,7 +60,7 @@ class LlmAgent(BaseAgent):
     @override
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
-        self._flow = SimpleFlow(max_iterations=self.max_iterations)
+        self._flow = SimpleFlow()
         # 如果 model 是 BaseLlm 实例，保存引用
         if isinstance(self.model, BaseLlm):
             self._llm = self.model
@@ -72,7 +72,7 @@ class LlmAgent(BaseAgent):
     def flow(self) -> 'BaseFlow':
         """返回 Flow 实例"""
         if self._flow is None:
-            self._flow = SimpleFlow(max_iterations=self.max_iterations)
+            self._flow = SimpleFlow()
         return self._flow
     
     @property
